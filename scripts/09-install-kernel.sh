@@ -30,6 +30,22 @@ for fw in qcom/a630_sqe.fw qcom/a630_gmu.bin qcom/a640_gmu.bin qcom/sm8150/a640_
     fetch_fw "$fw"
 done
 
+# [GPU zap 路径修正] raphael 的 DTB 把 zap 的 firmware-name 指向【设备专属路径】而非通用路径：
+#   设备 dmesg: Unable to load qcom/sm8150/Xiaomi/raphael/a640_zap.mbn → gpu hw init failed -2。
+# mainline DT 用 qcom/sm8150/xiaomi/raphael/a640_zap.mbn，该下游内核 DTB 用 Xiaomi/（大写）。
+# 通用 a640_zap 已由高通签名、sm8150 量产机普遍可用——把它铺到 DTB 要求的精确路径即可。
+# 两种大小写都铺，避免 DTB 差异（社区做法：把通用 zap 桥接到设备路径，见 pmOS firmware-*-adreno）。
+ZAP_GENERIC=rootdir/lib/firmware/qcom/sm8150/a640_zap.mbn
+if [ -e "$ZAP_GENERIC" ]; then
+    for dev in xiaomi Xiaomi; do
+        mkdir -p "rootdir/lib/firmware/qcom/sm8150/$dev/raphael"
+        install -m0644 "$ZAP_GENERIC" "rootdir/lib/firmware/qcom/sm8150/$dev/raphael/a640_zap.mbn"
+    done
+    echo "      + zap 已铺到设备专属路径: qcom/sm8150/{xiaomi,Xiaomi}/raphael/a640_zap.mbn"
+else
+    echo "      ! 无通用 a640_zap.mbn，无法桥接到设备路径（GPU zap 将仍缺失）"
+fi
+
 # 2. 安装 initramfs-tools 挂钩，强制将 GPU 固件打包进 initramfs（解决启动早期加载 msm_dpu 报 error -2 故障）
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [09]   └─ 配置 initramfs GPU 固件打包挂钩"
 mkdir -p rootdir/etc/initramfs-tools/hooks
@@ -44,7 +60,8 @@ esac
 . /usr/share/initramfs-tools/hook-functions
 
 # 强制将 Adreno GPU 微码与 zap 固件包含到内存盘中
-for fw in qcom/a630_sqe.fw qcom/a630_gmu.bin qcom/a640_gmu.bin qcom/sm8150/a640_zap.mbn; do
+for fw in qcom/a630_sqe.fw qcom/a630_gmu.bin qcom/a640_gmu.bin qcom/sm8150/a640_zap.mbn \
+          qcom/sm8150/xiaomi/raphael/a640_zap.mbn qcom/sm8150/Xiaomi/raphael/a640_zap.mbn; do
     if [ -e "/lib/firmware/$fw" ]; then
         copy_file firmware "/lib/firmware/$fw" "/lib/firmware/$fw"
     fi
