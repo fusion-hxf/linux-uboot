@@ -50,10 +50,16 @@ ln -sf /etc/machine-id rootdir/var/lib/dbus/machine-id
 # 删除构建期生成的 SSH 主机密钥，避免全网设备共用同一套（首启重新生成）
 rm -f rootdir/etc/ssh/ssh_host_*
 cat > rootdir/etc/systemd/system/regenerate-ssh-host-keys.service << 'EOF'
+# [设备报告] 不能 Before=ssh.socket：普通 service 默认 After=basic.target，而 basic.target
+# After=sockets.target（含 ssh.socket），故 Before=ssh.socket 会成环：
+#   sockets.target → ssh.socket → 本服务 → basic.target → sockets.target
+# systemd 解环时会【非确定性】删掉环中某个 job，本次删掉了 ssh.socket → :22 无人监听
+# → ssh 报 Connection refused（见 raphael-report 日志 "Found ordering cycle"）。
+# 仅需在 ssh.service（实际处理连接的守护进程）之前生成密钥即可，不要排在监听 socket 之前。
 [Unit]
 Description=Regenerate SSH host keys on first boot
 ConditionPathExists=!/etc/ssh/ssh_host_rsa_key
-Before=ssh.service ssh.socket
+Before=ssh.service
 
 [Service]
 Type=oneshot
