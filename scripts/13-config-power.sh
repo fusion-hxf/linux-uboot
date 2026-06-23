@@ -45,13 +45,13 @@ unmanaged-devices=interface-name:usb0
 EOF
 
 # [设备报告确认] /dev/watchdog 存在（QCOM_WDT 已 probe）→ 启用 systemd 硬件看门狗：
-# 系统挂死时由硬件自动重启（生产稳定性）。60s 心跳；调试期若不想自动重启可注释本段。
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13]   └─ 启用硬件看门狗 (RuntimeWatchdogSec=60s)"
+# 系统挂死时由硬件自动重启（生产稳定性）。使用 default 以适配固定超时时间的硬件看门狗，避免 EINVAL 错误。
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13]   └─ 启用硬件看门狗 (RuntimeWatchdogSec=default)"
 mkdir -p rootdir/etc/systemd/system.conf.d
 cat > rootdir/etc/systemd/system.conf.d/10-watchdog.conf << 'EOF'
 [Manager]
-RuntimeWatchdogSec=60s
-RebootWatchdogSec=10min
+RuntimeWatchdogSec=default
+RebootWatchdogSec=default
 EOF
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13] ✅ 电源管理配置完成"
