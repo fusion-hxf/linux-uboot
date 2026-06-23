@@ -2,7 +2,9 @@
 set -e
 
 HOSTNAME="${HOSTNAME:-xiaomi-raphael}"
-NAMESERVER="${NAMESERVER:-1.1.1.1}"
+# 构建期临时 DNS（仅供 bootstrap/apt 使用）。出厂 resolv.conf 在 15-cleanup.sh
+# 收口到 systemd-resolved；这里默认改用国内可达的 223.5.5.5，避免本地构建解析被干扰。
+NAMESERVER="${NAMESERVER:-223.5.5.5}"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [04] 🌐 配置网络和主机名"
 

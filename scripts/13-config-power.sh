@@ -51,4 +51,23 @@ cat > rootdir/etc/modprobe.d/ath10k.conf << 'EOF'
 options ath10k_core skip_otp=y
 EOF
 
+# [P0] 让 NetworkManager 不接管 usb0，避免与 usb-ncm.service + dnsmasq
+# （静态 IP + DHCP 服务端）冲突
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13]   └─ 标记 usb0 为 NetworkManager 非托管"
+mkdir -p rootdir/etc/NetworkManager/conf.d
+cat > rootdir/etc/NetworkManager/conf.d/10-unmanage-usb0.conf << 'EOF'
+[keyfile]
+unmanaged-devices=interface-name:usb0
+EOF
+
+# [设备报告确认] /dev/watchdog 存在（QCOM_WDT 已 probe）→ 启用 systemd 硬件看门狗：
+# 系统挂死时由硬件自动重启（生产稳定性）。60s 心跳；调试期若不想自动重启可注释本段。
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13]   └─ 启用硬件看门狗 (RuntimeWatchdogSec=60s)"
+mkdir -p rootdir/etc/systemd/system.conf.d
+cat > rootdir/etc/systemd/system.conf.d/10-watchdog.conf << 'EOF'
+[Manager]
+RuntimeWatchdogSec=60s
+RebootWatchdogSec=10min
+EOF
+
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13] ✅ 电源管理配置完成"

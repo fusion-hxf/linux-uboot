@@ -65,6 +65,8 @@
 
 ### 方式二：GitHub Actions 自定义构建（推荐）
 
+> 📘 完整分步指南见 [`github-build-guide.md`](github-build-guide.md)（含参数详解、内核 7.1 注意点、常见坑、刷机与复测）。
+
 1. Fork 本仓库至个人 GitHub 账号
 
 2. 进入仓库 **Actions** 页面，选择「构建系统镜像」工作流

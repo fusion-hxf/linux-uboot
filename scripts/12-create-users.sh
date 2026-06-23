@@ -14,7 +14,11 @@ echo "root:${ROOT_PASS}" | chroot rootdir chpasswd
 chroot rootdir useradd -m -G sudo -s /bin/bash ${USER_NAME}
 echo "${USER_NAME}:${USER_PASS}" | chroot rootdir chpasswd
 
-echo "PermitRootLogin yes" >> rootdir/etc/ssh/sshd_config
-echo "PasswordAuthentication yes" >> rootdir/etc/ssh/sshd_config
+# [P1] 用 drop-in 配置，避免被 sshd_config 中更靠前的同名项无声覆盖（sshd 首条匹配生效）
+mkdir -p rootdir/etc/ssh/sshd_config.d
+cat > rootdir/etc/ssh/sshd_config.d/10-raphael.conf << 'EOF'
+PermitRootLogin yes
+PasswordAuthentication yes
+EOF
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [12] ✅ 用户创建完成"

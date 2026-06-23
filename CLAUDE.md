@@ -77,7 +77,7 @@ Pipeline phases (one concern per script):
 | `09-install-kernel` | `dpkg -i` the kernel/headers/firmware debs, `update-initramfs` |
 | `10-config-ncm` | USB CDC-NCM gadget + dnsmasq |
 | `11`–`14` | fstab, users, power/wifi, zram |
-| `15`–`16` | cleanup; unmount everything, fsck, stamp fixed UUID |
+| `15`–`16` | cleanup + factory hardening (DNS/identity, see invariants); unmount, fsck, stamp UUID |
 
 ### Configuration model
 
@@ -97,8 +97,11 @@ and `13-config-power.sh`); keep them in sync if you touch one.
 
 These must match what the bootloader / partition layout / kernel expect:
 
-- **Fixed rootfs UUID** `ee8d3593-59b1-480e-a3b6-4fefb17ee7d8` (set in `16-finalize.sh`,
-  also in `build.sh`). Boot cmdline uses `root=PARTLABEL=userdata`.
+- **Fixed rootfs UUID** `ee8d3593-59b1-480e-a3b6-4fefb17ee7d8` (stamped in `16-finalize.sh`,
+  also in `build.sh`). **Load-bearing:** the external boot image's kernel cmdline is
+  `root=UUID=ee8d3593…` (confirmed on-device `/proc/cmdline`: `… loglevel=3 splash
+  root=UUID=ee8d3593-… rw`), so this UUID must match exactly or the device won't boot. (`fstab`
+  separately uses `PARTLABEL=userdata` for `/`, `PARTLABEL=cache` for `/boot`.)
 - **fstab** (`11-config-fstab.sh`): `/` ⇒ `PARTLABEL=userdata`, `/boot` ⇒ `PARTLABEL=cache`.
   Note the rootfs's `/boot` lives on the `cache` partition — consistent with the README
   flash steps (`fastboot flash cache xiaomi-k20pro-boot.img`, `fastboot flash boot u-boot.img`).
@@ -108,8 +111,50 @@ These must match what the bootloader / partition layout / kernel expect:
 - **Qualcomm device packages**: `rmtfs`, `protection-domain-mapper`, `tqftpserv`.
 - **WiFi**: `ath10k_core skip_otp=y` and NetworkManager `wifi.powersave = 2` (disabled) —
   fixes ping spikes (`13-config-power.sh`).
+- **DNS stack** (`15-cleanup.sh`): consolidated onto **systemd-resolved**. `/etc/resolv.conf`
+  → `/run/systemd/resolve/stub-resolv.conf` symlink; `FallbackDNS=223.5.5.5 119.29.29.29` for
+  the USB-NCM-only case. `nss-tlsd`/`libnss-tls` is purged and the `tls` token stripped from
+  `nsswitch.conf` hosts (its DoH upstreams are unreachable in CN and stall every `getaddrinfo`
+  ~4s — see `dns-fix.md`). Build-time DNS (`04`) is `223.5.5.5`.
+- **Per-device identity** (`15-cleanup.sh`): `/etc/machine-id` is emptied and SSH host keys are
+  deleted at build time; both regenerate on first boot (`regenerate-ssh-host-keys.service`). Do
+  NOT bake these in — `10-config-ncm.sh` uses `machine-id` as the USB serial, so a shared
+  machine-id means colliding USB serials / DHCP DUIDs across devices.
+- **usb0 is NOT NetworkManager-managed** (`13-config-power.sh`, `conf.d/10-unmanage-usb0.conf`);
+  it is owned by `usb-ncm.service` + dnsmasq.
+- **Boot-image sync hook** (`09-install-kernel.sh`): `/usr/local/sbin/sync-boot-images.sh` plus
+  hooks in `etc/kernel/postinst.d` / `etc/initramfs/post-update.d` copy the newest
+  `vmlinuz-*`/`initrd.img-*` onto the fixed names U-Boot loads (`/boot/linux.efi`,
+  `/boot/initramfs`) on every kernel/initramfs update. `/boot` is vfat (no symlinks) so it COPIES;
+  the 256 MB cache partition holds two sets. Without this, on-device updates are silent no-ops.
+- **Custom kernel/firmware are `apt-mark hold`** (`09`) so apt / unattended-upgrades can't replace them.
+- **Memory/storage tuning** (`14-config-zram.sh`): zram = zstd at `PERCENT=150` (adaptive to 6/8 GB
+  variants, replaced a fixed 10 GB `SIZE`); `vm.swappiness=150`, `vm.page-cluster=0`; **earlyoom**
+  enabled (chosen over systemd-oomd — needs only /proc, no PSI dep, though kernel has `CONFIG_PSI=y`);
+  journald capped `SystemMaxUse=200M`; `fstrim.timer` enabled; fstab `/` uses `noatime`.
+- **SSH config is a drop-in** (`12`, `sshd_config.d/10-raphael.conf`), not appended to the main file.
+- **Do NOT delete `/lib/firmware/regulatory.db`** — `15-cleanup.sh` used to `rm -f /lib/firmware/reg*`,
+  which broke cfg80211 regdomain (device dmesg: `failed to load regulatory.db`). That rm is removed
+  and `wireless-regdb` is installed (`06`).
+- **Hardware watchdog enabled** (`13`, `system.conf.d/10-watchdog.conf`, `RuntimeWatchdogSec=60s`):
+  `/dev/watchdog` (QCOM_WDT) is present on-device, so systemd auto-reboots a hung system.
+- **Generic firmware backfill** (`09-install-kernel.sh`): the external `firmware-xiaomi-raphael.deb`
+  ships device blobs but omits generic `linux-firmware` bits — device dmesg showed missing
+  `qcom/a630_sqe.fw` (Adreno → GPU faults under a GUI) and `qca/crbtfw21.tlv` (Bluetooth → hci DOWN).
+  The build now fetches these (+ `a630_gmu.bin`, `qcom/sm8150/a640_zap.mbn`, `qca/crnv21.bin`) from
+  `linux-firmware` **only if absent** (never clobbers the deb's vendor/signed blobs); source override
+  via `LINUX_FIRMWARE_BASE`. The GPU zap is best-effort — raphael may need its own vendor-signed zap.
 - **Custom shell commands**: `leijun` (blank screen) / `jinfan` (wake screen), added to
   `/etc/bash.bashrc`; `blank_screen.service` auto-blanks 15s after boot.
+
+## Optimization roadmap
+
+See `optimization-plan.md` for the full status analysis, the prioritized P0/P1/P2 roadmap, and
+§七 (kernel-7.1 capability findings). P0 (DNS determinism, per-device identity, usb0 ownership) and
+most of P1 (boot-image sync hook, apt-mark hold, earlyoom, zram/sysctl, noatime, journald cap,
+fstrim, SSH drop-in) are implemented in `06/09/11/12/13/14/15`. Deferred pending on-device
+confirmation (run `device-probe.sh` at repo root): IPv6 re-enable layer, watchdog
+(`/dev/watchdog`), suspend quality.
 
 ## External dependencies
 

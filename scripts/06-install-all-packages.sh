@@ -70,6 +70,12 @@ fi
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 开始安装（这可能需要几分钟...）"
 chroot rootdir apt-get install -y $ALL_PACKAGES
 
+# [P0] systemd-resolved：DNS 解析收口到 resolved（最终配置见 15-cleanup.sh）
+# [P1] earlyoom：内存压力下优雅杀进程，避免整机硬卡死（配置见 14-config-zram.sh）
+# [设备报告] wireless-regdb：确保 regulatory.db 存在（WiFi 监管域，配合 15 不再删除它）
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装 systemd-resolved / earlyoom / wireless-regdb"
+chroot rootdir apt-get install -y systemd-resolved earlyoom wireless-regdb
+
 if [[ "$SYSTEM_TYPE" == *"debian-"* ]]; then
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 修复 Debian dpkg 错误"
     chroot rootdir dpkg --remove --force-remove-reinstreq shim-signed 2>/dev/null || true
