@@ -28,7 +28,12 @@ echo 0x0200 > $G/bcdUSB
 mkdir -p $G/strings/0x409
 echo xiaomi-raphael > $G/strings/0x409/manufacturer
 echo NCM > $G/strings/0x409/product
-echo $(cat /etc/machine-id) > $G/strings/0x409/serialnumber
+# [设备报告] 确保 USB 序列号非空：machine-id 在 15-cleanup 被清空、交首启重生成，
+# 若本服务早于其落盘运行会取到空串 → 空序列号会让部分 Windows NCM 驱动建不出稳定网卡。
+[ -s /etc/machine-id ] || systemd-machine-id-setup >/dev/null 2>&1 || true
+SERIAL="$(cat /etc/machine-id 2>/dev/null)"
+[ -n "$SERIAL" ] || SERIAL=raphael000000000000
+echo "$SERIAL" > $G/strings/0x409/serialnumber
 mkdir -p $G/configs/c.1
 mkdir -p $G/configs/c.1/strings/0x409
 echo NCM > $G/configs/c.1/strings/0x409/configuration
