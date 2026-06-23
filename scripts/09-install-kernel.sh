@@ -26,7 +26,7 @@ fetch_fw() {
     rm -f "$tmp"
     return 0
 }
-for fw in qcom/a630_sqe.fw qcom/a630_gmu.bin qcom/sm8150/a640_zap.mbn qca/crbtfw21.tlv qca/crnv21.bin; do
+for fw in qcom/a630_sqe.fw qcom/a630_gmu.bin qcom/a640_gmu.bin qcom/sm8150/a640_zap.mbn qca/crbtfw21.tlv qca/crnv21.bin; do
     fetch_fw "$fw"
 done
 
@@ -44,7 +44,7 @@ esac
 . /usr/share/initramfs-tools/hook-functions
 
 # 强制将 Adreno GPU 微码与 zap 固件包含到内存盘中
-for fw in qcom/a630_sqe.fw qcom/a630_gmu.bin qcom/sm8150/a640_zap.mbn; do
+for fw in qcom/a630_sqe.fw qcom/a630_gmu.bin qcom/a640_gmu.bin qcom/sm8150/a640_zap.mbn; do
     if [ -e "/lib/firmware/$fw" ]; then
         copy_file firmware "/lib/firmware/$fw" "/lib/firmware/$fw"
     fi
