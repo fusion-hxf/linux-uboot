@@ -176,9 +176,15 @@ fastboot flash userdata rootfs.img
 fastboot reboot
 ```
 
+> 说明：`rootfs.img` 是 **Android 稀疏镜像 (sparse)**，可被 fastboot 直接刷写，只传输实际占用的数据块。
+> 首次开机后根分区会通过 fstab 的 `x-systemd.growfs` 自动扩容到整个 `userdata` 分区，无需手动操作。
+> 如需在本机挂载查看内容，请先用 `simg2img rootfs.img rootfs.raw.img` 还原为 raw 再 loop 挂载。
+
 ## ❓ 常见问题 FAQ
 
 - 什么破玩意儿，开机就卡死了？？？（请拔掉sim卡）
+
+- **刷 `userdata` 时报 `std::bad_alloc`**：这是旧版（raw 格式）镜像太大、fastboot 一次性分配内存失败导致的。本仓库新构建的 `rootfs.img` 已是稀疏镜像，不会再有此问题；若手头仍是旧 raw 镜像，可用 `img2simg rootfs.img rootfs_sparse.img`（来自 `android-sdk-libsparse-utils`）转成稀疏镜像后再 `fastboot flash userdata rootfs_sparse.img`。
 
 - **Windows 无法连接设备 CDC NCM 驱动**：参考解决方案视频[BV1tW4y1A79V](https://www.bilibili.com/video/BV1tW4y1A79V/)
 

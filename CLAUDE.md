@@ -78,7 +78,7 @@ Pipeline phases (one concern per script):
 | `09-install-kernel` | `dpkg -i` the kernel/headers/firmware debs, `update-initramfs` |
 | `10-config-ncm` | USB CDC-NCM gadget + dnsmasq |
 | `11`–`14` | fstab, users, power/wifi, zram |
-| `15`–`16` | cleanup + factory hardening (DNS/identity, see invariants); unmount, fsck, stamp UUID |
+| `15`–`16` | cleanup + factory hardening (DNS/identity, see invariants); unmount, fsck, stamp UUID, convert raw → Android sparse image |
 
 ### Configuration model
 

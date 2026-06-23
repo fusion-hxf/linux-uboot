@@ -215,6 +215,16 @@ jobs:
             fi
           fi
 
+          # img2simg：把 raw 镜像转成 fastboot 可稳定刷写的 sparse 镜像（见 16-finalize.sh）
+          if ! command -v img2simg &> /dev/null; then
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')]   安装 android-sdk-libsparse-utils (img2simg)..."
+            sudo apt-get update
+            sudo apt-get install -y android-sdk-libsparse-utils
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')]   img2simg 安装完成"
+          else
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')]   img2simg 已安装，跳过"
+          fi
+
       - name: 下载内核包和boot.img (并行)
         run: |
           mkdir -p xiaomi-raphael-debs_${{ env.KERNEL_VERSION }}
