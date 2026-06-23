@@ -32,9 +32,9 @@
 
 ---
 
-## 2. 触发一次构建（出镜像只走这条路）
+## 2. 触发一次构建（只能手动）
 
-**务必用手动触发 “Run workflow”（workflow_dispatch）**，不要指望 push 自动出镜像（原因见 §7 第 1 条）。
+本工作流**只支持手动触发**（`workflow_dispatch`）——push / PR 自动触发已移除，改脚本不会自动跑构建。
 
 1. fork 仓库 → **Actions** → 左侧选 **「构建系统镜像」**。
 2. 右上 **Run workflow** 下拉：
@@ -49,7 +49,7 @@
 | 参数(UI 标签) | 默认 | 含义 / 建议 |
 |---|---|---|
 | `build_mode`（构建模式） | `parallel` | `parallel`=按各参数笛卡尔积**批量**构建；`single`=只取每个参数的**第一个值**构建一个镜像（最快，适合验证） |
-| `system_types`（系统类型） | Ubuntu 3 种 | 默认 `ubuntu-server,ubuntu-gnome,ubuntu-phosh`；要 Debian 或单个自行填，取值见下方 |
+| `system_types`（系统类型） | `ubuntu-server` | 默认只构建 ubuntu-server；要其它类型/多个，逗号分隔自行填，取值见下方 |
 | `kernel_versions`（内核版本） | `7.1` | 默认已是 7.1；须在 `kernel_repository` 有对应 `kernel-v<版本>` release（如 `kernel-v7.1`） |
 | `bootstrap_tools`（构建工具） | `mmdebstrap` | `mmdebstrap`(快) 或 `debootstrap` |
 | `desktop_environments`（桌面环境） | `phosh-core` | 仅对 `*-phosh` 生效：`phosh-core`/`phosh-full`/`phosh-phone` |
@@ -85,7 +85,7 @@ desktop_environments = phosh-core
 ubuntu_versions = resolute
 ```
 
-**C. 批量全量（耗时长）**：`build_mode=parallel`，`system_types` 保留 6 种，`kernel_versions=7.1`。
+**C. 批量全量（耗时长）**：`build_mode=parallel`，`system_types` 填全 6 种，`kernel_versions=7.1`。
 
 ---
 
@@ -134,8 +134,7 @@ earlyoom 运行、`RuntimeWatchdogSec` 已开、dmesg 不再报 `regulatory.db` 
 
 ## 8. 常见问题 / 坑
 
-1. **push 自动构建出不了镜像** —— 工作流虽对 `scripts/**` 等 push 触发，但 push 时没有手动输入参数，
-   生成的构建矩阵为空、且 `KERNEL_REPO` 会回退到错误仓库。**出镜像务必用 “Run workflow”。**
+1. **只能手动触发** —— push / PR 自动触发已移除（避免改脚本就跑 ARM 构建）。出镜像一律 Actions → **Run workflow**。
 2. **默认已是内核 7.1 + Ubuntu resolute(26.04)** —— 如需 7.0/6.18 或 Debian，在表单里改对应参数即可。
 3. **`kernel-v<版本>` release 必须齐全** —— `kernel_repository` 对应 tag 下需有
    `linux-image-/linux-headers-/firmware-xiaomi-raphael.deb`；桌面版(`*-gnome`/`*-phosh`)还需

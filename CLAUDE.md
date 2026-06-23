@@ -171,8 +171,10 @@ explicitly to build Debian or kernel 6.18/7.0.
 
 ## CI
 
-`.github/workflows/build-system.yml` is `workflow_dispatch` (manual, with a build matrix in
-`parallel`/`single` mode) and also triggers on pushes/PRs touching `scripts/**`, `config/**`,
-or `*.sh`. Builds run on `ubuntu-24.04-arm`, download the external artifacts in parallel, run
-`build.sh`, then package `.7z` + `.sha256`. The `release` job publishes everything to a single
-`latest` GitHub Release; images larger than 2 GB are left in Artifacts only.
+`.github/workflows/build-system.yml` is **`workflow_dispatch` only** (manual; the push/PR
+auto-triggers were removed). With defaults it builds a single `ubuntu-server` + kernel `7.1` +
+`resolute` image (the matrix generator also has `${VAR:-default}` fallbacks so empty inputs still
+produce that one image). `KERNEL_REPO` falls back to `GengWei1997/kernel-deb`. Builds run on
+`ubuntu-24.04-arm`, download the external artifacts in parallel, run `build.sh`, then package
+`.7z` + `.sha256`. The `release` job publishes to a single `latest` GitHub Release; images larger
+than 2 GB are left in Artifacts only.

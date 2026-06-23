@@ -14,7 +14,7 @@ on:
       system_types:
         description: '系统类型 (用逗号分隔多个值，如: ubuntu-server,ubuntu-phosh)'
         required: false
-        default: 'ubuntu-server,ubuntu-gnome,ubuntu-phosh'
+        default: 'ubuntu-server'
         type: string
       kernel_versions:
         description: '内核版本 (默认 7.1)'
@@ -46,20 +46,8 @@ on:
         required: false
         default: 'GengWei1997/kernel-deb'
         type: string
-  push:
-    branches:
-      - main
-    paths:
-      - 'scripts/**'
-      - 'config/**'
-      - 'build.sh'
-      - '*.sh'
-  pull_request:
-    paths:
-      - 'scripts/**'
-      - 'config/**'
-      - 'build.sh'
-      - '*.sh'
+  # 仅手动触发：已移除 push / pull_request 自动触发，避免每次改脚本就跑 ARM 构建。
+  # （generate-matrix 仍保留 inputs 为空时的默认回退，作为防御。）
 
 env:
   HOSTNAME: xiaomi-raphael
@@ -86,13 +74,24 @@ jobs:
           set -e
           
           BUILD_MODE="${{ github.event.inputs.build_mode }}"
-          echo "build_mode=${BUILD_MODE}" >> $GITHUB_OUTPUT
           SYS_TYPES="${{ github.event.inputs.system_types }}"
           KERN_VERS="${{ github.event.inputs.kernel_versions }}"
           BOOT_TOOLS="${{ github.event.inputs.bootstrap_tools }}"
           DESKTOP_ENV="${{ github.event.inputs.desktop_environments }}"
           DEB_VERS="${{ github.event.inputs.debian_versions }}"
           UBU_VERS="${{ github.event.inputs.ubuntu_versions }}"
+
+          # push / pull_request 事件不带 inputs，这里回退到默认值，避免空矩阵报错
+          # 默认只构建：ubuntu-server + 内核 7.1 + Ubuntu 26.04 resolute
+          BUILD_MODE="${BUILD_MODE:-parallel}"
+          SYS_TYPES="${SYS_TYPES:-ubuntu-server}"
+          KERN_VERS="${KERN_VERS:-7.1}"
+          BOOT_TOOLS="${BOOT_TOOLS:-mmdebstrap}"
+          DESKTOP_ENV="${DESKTOP_ENV:-phosh-core}"
+          DEB_VERS="${DEB_VERS:-trixie}"
+          UBU_VERS="${UBU_VERS:-resolute}"
+
+          echo "build_mode=${BUILD_MODE}" >> $GITHUB_OUTPUT
           
           if [ "$BUILD_MODE" = "single" ]; then
             # 单模式：取每个输入的第一个值
@@ -186,7 +185,7 @@ jobs:
       DESKTOP_ENV: ${{ matrix.desktop_env }}
       DEBIAN_VERSION: ${{ matrix.debian_version }}
       UBUNTU_VERSION: ${{ matrix.ubuntu_version }}
-      KERNEL_REPO: ${{ github.event.inputs.kernel_repository || 'GengWei1997/linux-xiaomi-raphael-uboot' }}
+      KERNEL_REPO: ${{ github.event.inputs.kernel_repository || 'GengWei1997/kernel-deb' }}
 
     steps:
       - name: 检出代码
