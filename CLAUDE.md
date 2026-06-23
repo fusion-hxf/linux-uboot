@@ -141,9 +141,15 @@ These must match what the bootloader / partition layout / kernel expect:
 - **Generic firmware backfill** (`09-install-kernel.sh`): the external `firmware-xiaomi-raphael.deb`
   ships device blobs but omits generic `linux-firmware` bits — device dmesg showed missing
   `qcom/a630_sqe.fw` (Adreno → GPU faults under a GUI) and `qca/crbtfw21.tlv` (Bluetooth → hci DOWN).
-  The build now fetches these (+ `a630_gmu.bin`, `qcom/sm8150/a640_zap.mbn`, `qca/crnv21.bin`) from
+  The build now fetches these (+ `a640_gmu.bin`, `qcom/sm8150/a640_zap.mbn`, `qca/crnv21.bin`) from
   `linux-firmware` **only if absent** (never clobbers the deb's vendor/signed blobs); source override
-  via `LINUX_FIRMWARE_BASE`. The GPU zap is best-effort — raphael may need its own vendor-signed zap.
+  via `LINUX_FIRMWARE_BASE`. (`a630_gmu.bin` was removed — that's the sdm845 GMU; sm8150/Adreno 640
+  needs `a640_gmu.bin`.) **GPU zap path**: the generic `a640_zap.mbn` lands at `qcom/sm8150/a640_zap.mbn`,
+  but raphael's DTB sets `firmware-name = qcom/sm8150/{xiaomi,Xiaomi}/raphael/a640_zap.mbn` (the downstream
+  kernel uses capital `Xiaomi`), so `09` also copies the generic zap to both device-specific paths (and
+  into the initramfs hook). Without that copy the kernel logs `Unable to load …/a640_zap.mbn → gpu hw
+  init failed -2`. If the generic (qcom-signed) zap is later rejected by TrustZone (`-22 initializing
+  firmware`), extract the OEM-signed `a640_zap.mbn` from the device's MIUI `vendor` partition instead.
 - **Custom shell commands**: `leijun` (blank screen) / `jinfan` (wake screen), added to
   `/etc/bash.bashrc`; `blank_screen.service` auto-blanks 15s after boot.
 
