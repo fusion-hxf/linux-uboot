@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-KERNEL_VERSION="${1:-6.18}"
+KERNEL_VERSION="${1:-7.1}"
 REPO="${2:-${{ github.repository }}}"
 
 echo "下载内核包和 boot.img"

@@ -2,17 +2,17 @@
 set -e
 
 
-# 解析参数
-SYSTEM_TYPE="${1:?请指定系统类型}"
-KERNEL_VERSION="${2:-6.18}"
+# 解析参数（默认构建：ubuntu-server + 内核 7.1 + Ubuntu 26.04 resolute）
+SYSTEM_TYPE="${1:-ubuntu-server}"
+KERNEL_VERSION="${2:-7.1}"
 DESKTOP_ENV="${3:-phosh-full}"
 
-# 解析发行版版本参数
+# 解析发行版版本参数（未显式设置环境变量时给默认值）
 if [[ "$SYSTEM_TYPE" == *"debian-"* ]]; then
-    DEBIAN_VERSION="${DEBIAN_VERSION:?请设置 DEBIAN_VERSION 环境变量}"
+    DEBIAN_VERSION="${DEBIAN_VERSION:-trixie}"
     export DEBIAN_VERSION
 elif [[ "$SYSTEM_TYPE" == *"ubuntu-"* ]]; then
-    UBUNTU_VERSION="${UBUNTU_VERSION:?请设置 UBUNTU_VERSION 环境变量}"
+    UBUNTU_VERSION="${UBUNTU_VERSION:-resolute}"
     export UBUNTU_VERSION
 fi
 

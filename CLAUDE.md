@@ -27,16 +27,17 @@ Fetch those prerequisites first (not called by `build.sh`):
 
 ```bash
 # scripts/00-download-deps.sh <KERNEL_VERSION> <GH_REPO>
-bash scripts/00-download-deps.sh 7.0 GengWei1997/kernel-deb
+bash scripts/00-download-deps.sh 7.1 GengWei1997/kernel-deb
 ```
 
 Then build one image:
 
 ```bash
 # build.sh <system-type> [kernel-version] [desktop-env]
-# DEBIAN_VERSION or UBUNTU_VERSION must be set depending on system-type.
-sudo BOOTSTRAP_TOOL=mmdebstrap DEBIAN_VERSION=trixie ./build.sh debian-phosh 7.0 phosh-core
-sudo BOOTSTRAP_TOOL=mmdebstrap UBUNTU_VERSION=resolute ./build.sh ubuntu-server 7.0
+# Defaults when omitted: ubuntu-server + kernel 7.1 + Ubuntu 26.04 (resolute).
+# UBUNTU_VERSION/DEBIAN_VERSION default to resolute/trixie; override via env.
+sudo BOOTSTRAP_TOOL=mmdebstrap ./build.sh                                    # ubuntu-server 7.1 resolute
+sudo BOOTSTRAP_TOOL=mmdebstrap DEBIAN_VERSION=trixie ./build.sh debian-phosh 7.1 phosh-core
 ```
 
 - `system-type`: one of `debian-server`, `debian-gnome`, `debian-phosh`,
@@ -164,8 +165,10 @@ Kernel/firmware debs and the boot image come from external GitHub releases, not 
 - `xiaomi-k20pro-boot.img`: `GengWei1997/kernel-deb` release `v1.0.0`.
 - `alsa-xiaomi-raphael.deb`: only downloaded/installed for `phosh`/`gnome` desktop builds.
 
-**Version default mismatch to be aware of:** `build.sh` defaults `KERNEL_VERSION` to `6.18`,
-but the CI workflow and README default to `7.0`. Pass the version explicitly.
+**Defaults:** kernel version defaults to `7.1` everywhere (`build.sh`, `00-download-deps.sh`, CI). The
+CI's default `system_types` is the Ubuntu set (`ubuntu-server,ubuntu-gnome,ubuntu-phosh`) and
+`ubuntu_versions=resolute` (26.04). `build.sh` with no args builds `ubuntu-server`. Pass other values
+explicitly to build Debian or kernel 6.18/7.0.
 
 ## CI
 

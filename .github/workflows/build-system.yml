@@ -12,14 +12,14 @@ on:
           - single
         default: 'parallel'
       system_types:
-        description: '系统类型 (用逗号分隔多个值，如: debian-server,debian-gnome)'
+        description: '系统类型 (用逗号分隔多个值，如: ubuntu-server,ubuntu-phosh)'
         required: false
-        default: 'debian-server,debian-gnome,debian-phosh,ubuntu-server,ubuntu-gnome,ubuntu-phosh'
+        default: 'ubuntu-server,ubuntu-gnome,ubuntu-phosh'
         type: string
       kernel_versions:
-        description: '内核版本 (默认7.0可选6.18)'
+        description: '内核版本 (默认 7.1)'
         required: false
-        default: '7.0'
+        default: '7.1'
         type: string
       bootstrap_tools:
         description: '构建工具 (用逗号分隔多个值，如: mmdebstrap)'
