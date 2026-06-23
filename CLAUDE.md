@@ -136,8 +136,14 @@ These must match what the bootloader / partition layout / kernel expect:
 - **Do NOT delete `/lib/firmware/regulatory.db`** — `15-cleanup.sh` used to `rm -f /lib/firmware/reg*`,
   which broke cfg80211 regdomain (device dmesg: `failed to load regulatory.db`). That rm is removed
   and `wireless-regdb` is installed (`06`).
-- **Hardware watchdog enabled** (`13`, `system.conf.d/10-watchdog.conf`, `RuntimeWatchdogSec=60s`):
-  `/dev/watchdog` (QCOM_WDT) is present on-device, so systemd auto-reboots a hung system.
+- **Hardware watchdog enabled** (`13`, `system.conf.d/10-watchdog.conf`, `RuntimeWatchdogSec=default`):
+  `/dev/watchdog0` (`qcom_wdt`) is present on-device. `default` (not an explicit value) is deliberate — it
+  opens+pings the device but leaves the timeout at the kernel/DT default (**30s** on sm8150), so it can never
+  EINVAL. **Confirmed armed on-device** (boot journal: `Using hardware watchdog /dev/watchdog0: 'qcom_wdt'`
+  + `Watchdog running with a hardware timeout of 30s`), so systemd auto-reboots a hung system. NOTE: in
+  `default` mode `systemctl show -p RuntimeWatchdogUSec` reports `infinity` — that is the "don't change the
+  timeout" sentinel, **NOT** off; judge armed/not via the boot journal lines above, not this property
+  (the qcom_wdt sysfs node also omits `timeout`/`max_timeout`). `device-probe.sh` §9 keys off the journal.
 - **Generic firmware backfill** (`09-install-kernel.sh`): the external `firmware-xiaomi-raphael.deb`
   ships device blobs but omits generic `linux-firmware` bits — device dmesg showed missing
   `qcom/a630_sqe.fw` (Adreno → GPU faults under a GUI) and `qca/crbtfw21.tlv` (Bluetooth → hci DOWN).
@@ -158,9 +164,9 @@ These must match what the bootloader / partition layout / kernel expect:
 See `optimization-plan.md` for the full status analysis, the prioritized P0/P1/P2 roadmap, and
 §七 (kernel-7.1 capability findings). P0 (DNS determinism, per-device identity, usb0 ownership) and
 most of P1 (boot-image sync hook, apt-mark hold, earlyoom, zram/sysctl, noatime, journald cap,
-fstrim, SSH drop-in) are implemented in `06/09/11/12/13/14/15`. Deferred pending on-device
-confirmation (run `device-probe.sh` at repo root): IPv6 re-enable layer, watchdog
-(`/dev/watchdog`), suspend quality.
+fstrim, SSH drop-in) are implemented in `06/09/11/12/13/14/15`. Watchdog self-healing is **confirmed
+armed on-device** (30s, see invariants). Deferred pending on-device confirmation (run `device-probe.sh`
+at repo root): IPv6 re-enable layer, suspend quality.
 
 ## External dependencies
 

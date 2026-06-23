@@ -44,8 +44,11 @@ cat > rootdir/etc/NetworkManager/conf.d/10-unmanage-usb0.conf << 'EOF'
 unmanaged-devices=interface-name:usb0
 EOF
 
-# [设备报告确认] /dev/watchdog 存在（QCOM_WDT 已 probe）→ 启用 systemd 硬件看门狗：
-# 系统挂死时由硬件自动重启（生产稳定性）。使用 default 以适配固定超时时间的硬件看门狗，避免 EINVAL 错误。
+# [设备确认] /dev/watchdog0 (qcom_wdt) 存在 → 启用 systemd 硬件看门狗，系统挂死时硬件自动重启。
+# 故意用 default 而非显式秒数：default = 打开并喂狗、但超时沿用内核/DT 默认值（sm8150=30s），永不 EINVAL。
+# 已在设备上确认 armed（boot journal: "Watchdog running with a hardware timeout of 30s"）。
+# 注意：default 模式下 `systemctl show -p RuntimeWatchdogUSec` 显示 infinity —— 那是"不改超时"的哨兵，
+# 不是关闭；判定是否 armed 看 journal，别看这个属性（device-probe.sh §9 即按此核对）。
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13]   └─ 启用硬件看门狗 (RuntimeWatchdogSec=default)"
 mkdir -p rootdir/etc/systemd/system.conf.d
 cat > rootdir/etc/systemd/system.conf.d/10-watchdog.conf << 'EOF'

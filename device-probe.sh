@@ -253,11 +253,20 @@ else
 fi
 rwd=$(systemctl show -p RuntimeWatchdogUSec --value 2>/dev/null)
 echo "  systemd RuntimeWatchdogUSec=${rwd:-?}"
-# [改进] 真相核对：只看"存在"会给假 OK。硬件 max_timeout 可能 < 配置值 → systemd arm 失败
+# [真相核对] 判定 armed 必须以 PID1 的 boot 日志为准，不能看 sysfs/RuntimeWatchdogUSec：
+#   - qcom_wdt 不导出 /sys/class/watchdog/watchdog0/{timeout,max_timeout,state}，故 $curt/$maxt 恒空；
+#   - RuntimeWatchdogSec=default 会让 RuntimeWatchdogUSec 显示 infinity（哨兵≠关闭），仍以内核默认超时 arm。
+#   权威信号：systemd 启动时记录 "Watchdog running with a (hardware) timeout of <N>s"。
 if [ "${CAP[watchdog]}" = present ]; then
   rwd_s=$(printf '%s' "$rwd" | awk '{v=$0; if(v~/min/){sub(/min.*/,"",v);print v*60} else if(v~/s/){sub(/s.*/,"",v);print v+0} else print 0}')
-  wderr=$(timeout 10 journalctl -b --no-pager 2>/dev/null | grep -i 'Failed to set watchdog hardware timeout' | tail -1)
-  if [ -n "$wderr" ]; then
+  wdlog=$(timeout 10 journalctl -b --no-pager 2>/dev/null | grep -iE 'Watchdog running with a .*timeout of|Failed to set watchdog hardware timeout')
+  wdrun=$(printf '%s\n' "$wdlog" | grep -iE 'Watchdog running with a .*timeout of' | tail -1)
+  wderr=$(printf '%s\n' "$wdlog" | grep -i 'Failed to set watchdog hardware timeout' | tail -1)
+  if [ -n "$wdrun" ]; then
+    wto=$(printf '%s' "$wdrun" | grep -oE 'timeout of [0-9]+' | grep -oE '[0-9]+')
+    c_ok "看门狗已 arm（systemd 硬件超时 ${wto:-?}s；default 模式下 RuntimeWatchdogUSec=infinity 属正常）→ 自愈生效"
+    CAP[watchdog]=armed
+  elif [ -n "$wderr" ]; then
     c_fail "systemd 未能 arm 看门狗（自愈实际未生效）：${wderr#*]: }；RuntimeWatchdogSec 需 ≤ 硬件 max_timeout(${maxt:-?}s)"
     CAP[watchdog]=present_unarmed
   elif [ -n "$maxt" ] && [ "${maxt:-0}" -gt 0 ] 2>/dev/null && gt "${rwd_s:-0}" "$maxt"; then
@@ -266,7 +275,7 @@ if [ "${CAP[watchdog]}" = present ]; then
   elif [ -n "$curt" ] && [ "${curt:-0}" != 0 ] 2>/dev/null; then
     c_ok "看门狗已 arm（当前 timeout=${curt}s）→ 自愈生效"; CAP[watchdog]=armed
   else
-    c_info "看门狗存在；RuntimeWatchdogSec 可能为 0/off（未启用自愈）"
+    c_info "看门狗存在但无法从 journal 确认（本脚本需以 root 运行才能读系统日志）；RuntimeWatchdogSec 也可能为 0/off"
   fi
 fi
 
