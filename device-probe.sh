@@ -15,6 +15,9 @@ export LANG=C LC_ALL=C
 TS="$(date +%Y%m%d-%H%M%S)"
 REPORT="${PWD}/raphael-report-${TS}.txt"
 touch "$REPORT" 2>/dev/null || REPORT="/tmp/raphael-report-${TS}.txt"
+# [C3] 机器可读旁路 + 回归基线：  bash device-probe.sh --baseline <旧.kv>
+BASELINE=""; [ "${1:-}" = "--baseline" ] && BASELINE="${2:-}"
+KV="${REPORT%.txt}.kv"
 
 # ---- 判定累加器 / 能力矩阵 ----
 declare -a F_FAIL F_WARN F_INFO
@@ -367,6 +370,232 @@ else c_na "journalctl"; fi
 sub "固件加载失败 (dmesg)"
 timeout 10 dmesg 2>/dev/null | grep -iE 'firmware|failed to load|direct firmware|rproc|adsp|cdsp' | grep -iE 'fail|error|timeout' | tail -n 15 | sed 's/^/  /' || c_na "dmesg（需 root）"
 
+# ───────────────────────────── 13. 时间同步 / NTP（A2）─────────────────────────────
+hdr "13. 时间同步 / NTP (时钟错乱会伪装成 DNS/TLS/apt 故障)"
+nsync=""; tsd=""
+if have timedatectl; then
+  td=$(timedatectl show 2>/dev/null)
+  nsync=$(printf '%s\n' "$td" | sed -n 's/^NTPSynchronized=//p')
+  echo "  NTP=$(printf '%s\n' "$td" | sed -n 's/^NTP=//p')  NTPSynchronized=$nsync  Timezone=$(printf '%s\n' "$td" | sed -n 's/^Timezone=//p')  LocalRTC=$(printf '%s\n' "$td" | sed -n 's/^LocalRTC=//p')"
+else
+  echo "  timedatectl 不可用"
+fi
+for s in systemd-timesyncd chrony chronyd ntp ntpsec; do
+  systemctl is-active "$s" >/dev/null 2>&1 && { echo "  时间同步服务: $s = active"; tsd=$s; break; }
+done
+[ -z "$tsd" ] && echo "  时间同步服务: 无 active 守护"
+yr=$(date +%Y 2>/dev/null)
+echo "  当前系统时间: $(date '+%F %T %Z')"
+skew=""
+if have curl && [ "${CAP[net]}" = up ]; then
+  rdate=$(curl -sI --max-time 8 https://mirrors.tuna.tsinghua.edu.cn/ 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: //p' | head -1)
+  if [ -n "$rdate" ]; then
+    rs=$(date -d "$rdate" +%s 2>/dev/null); locs=$(date +%s)
+    [ -n "$rs" ] && skew=$(awk -v a="$rs" -v b="$locs" 'BEGIN{d=a-b; if(d<0)d=-d; print d}')
+    echo "  HTTP Date 校时: 远端=[$rdate]  本地偏差≈${skew:-?}s"
+  fi
+fi
+if [ "$nsync" = yes ]; then
+  c_ok "时钟已与 NTP 同步"; CAP[timesync]=synced
+elif [ -n "$yr" ] && [ "$yr" -lt 2024 ] 2>/dev/null; then
+  c_fail "系统时钟年份=$yr 明显错乱（设备无 RTC 电池常见）→ TLS 证书校验必败、apt/curl HTTPS 全崩"; CAP[timesync]=clock_wrong
+elif [ -n "$skew" ] && [ "$skew" -gt 90 ] 2>/dev/null; then
+  c_fail "时钟与网络相差 ${skew}s（>90s）→ TLS/证书校验可能失败"; CAP[timesync]=skewed
+elif [ "$nsync" = no ]; then
+  c_warn "NTP 未同步（${tsd:-无同步服务}）—— 联网后应自动校正；纯离线场景需手动 timedatectl set-time"; CAP[timesync]=unsynced
+else
+  c_info "无法判定时间同步状态"; CAP[timesync]=unknown
+fi
+
+# ───────────────────────────── 14. 包状态 / apt-mark hold（A3，验不变量）─────────────────────────────
+hdr "14. 包状态 / apt-mark hold (内核被 unattended-upgrade 换掉=变砖)"
+if have apt-mark; then
+  holds=$(apt-mark showhold 2>/dev/null)
+  echo "  当前 hold 列表:"; printf '%s\n' "${holds:-（空）}" | sed 's/^/    /'
+  kpkgs=$(dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /^linux-(image|headers)-[0-9]/ {print $2}')
+  echo "  已安装内核包: ${kpkgs:-（无）}"
+  miss=0
+  for p in $kpkgs; do printf '%s\n' "$holds" | grep -qxF "$p" || { c_fail "内核包未 hold: $p（apt / unattended-upgrades 可能替换 → 变砖）"; miss=1; }; done
+  if dpkg -l firmware-xiaomi-raphael >/dev/null 2>&1; then
+    printf '%s\n' "$holds" | grep -qxF firmware-xiaomi-raphael || { c_warn "固件包未 hold: firmware-xiaomi-raphael"; miss=1; }
+  fi
+  if [ "$miss" = 0 ] && [ -n "$kpkgs" ]; then c_ok "内核/固件均已 apt-mark hold"; CAP[apt_hold]=ok; else CAP[apt_hold]=incomplete; fi
+else
+  c_na "apt-mark"; CAP[apt_hold]=unknown
+fi
+sub "包数据库一致性 (dpkg -C)"
+if have dpkg; then
+  broken=$(dpkg -C 2>/dev/null | grep -v '^[[:space:]]*$' | head -10)
+  if [ -n "$broken" ]; then c_warn "dpkg -C 报告半装/未配置包:"; printf '%s\n' "$broken" | sed 's/^/    /'; else c_ok "dpkg 数据库一致（无半装包）"; fi
+fi
+sub "unattended-upgrades 内核排除"
+uf=/etc/apt/apt.conf.d/50unattended-upgrades
+if [ -r "$uf" ]; then
+  grep -qiE 'linux-image|linux-generic|"linux-"|Package-Blacklist' "$uf" 2>/dev/null && c_info "unattended-upgrades 含内核/黑名单相关条目（请确认在 Package-Blacklist 段内）" || c_info "unattended-upgrades 未显式排除内核（已 apt-mark hold 即可兜底）"
+else
+  c_info "无 50unattended-upgrades（未启用自动升级 / 仅 hold 兜底）"
+fi
+
+# ───────────────────────────── 15. 音频链路根因（A1，深化）─────────────────────────────
+hdr "15. 音频链路根因定位 (QDSP6/q6 probe 链 → 区分 DTB 缺陷 vs rootfs 可修)"
+has_card=0; grep -qE '^[[:space:]]*[0-9]+[[:space:]]*\[' /proc/asound/cards 2>/dev/null && has_card=1
+echo "  /proc/asound/cards:"; sed 's/^/    /' /proc/asound/cards 2>/dev/null
+sub "q6/ASoC 模块加载"
+lsmod 2>/dev/null | grep -iE 'q6|apr|snd_soc|gpr' | sed 's/^/  /' || echo "  （无 q6/snd_soc 模块；可能 builtin）"
+sub "q6 平台驱动绑定情况 (bound device = probe 成功)"
+shopt -s nullglob 2>/dev/null
+for drv in /sys/bus/platform/drivers/*q6* /sys/bus/platform/drivers/*apr* /sys/bus/platform/drivers/*gpr*; do
+  [ -d "$drv" ] || continue
+  bound=$(for e in "$drv"/*; do b=$(basename "$e"); case "$b" in bind|unbind|uevent|module) ;; *) [ -L "$e" ] && echo "$b";; esac; done | tr '\n' ' ')
+  printf '  %-26s bound=[%s]\n' "$(basename "$drv")" "${bound:-无}"
+done
+shopt -u nullglob 2>/dev/null
+sub "DT 音频节点 (machine driver / DAI)"
+snd_node=$(ls -d /proc/device-tree/sound* /proc/device-tree/*/sound* 2>/dev/null | head -1)
+if [ -n "$snd_node" ]; then echo "  DT sound 节点: $snd_node (compatible=$(tr -d '\0' < "$snd_node/compatible" 2>/dev/null))"; else echo "  DT 无顶层 sound 节点"; fi
+dais_node=$(find /proc/device-tree -maxdepth 6 -type d -name 'dais' 2>/dev/null | head -1)
+if [ -n "$dais_node" ]; then
+  daichild=$(find "$dais_node" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+  echo "  DT dais 节点: $dais_node  子 DAI 数=$daichild"
+fi
+sub "dmesg q6/snd probe 链"
+admsg=$(timeout 10 dmesg 2>/dev/null | grep -iE 'q6asm|q6afe|q6routing|q6adm|q6core|apr|snd[-_]soc|sndcard|gpr' | tail -n 15)
+if [ -n "$admsg" ]; then printf '%s\n' "$admsg" | sed 's/^/  /'; else echo "  （无相关 dmesg；可能需 root）"; fi
+if [ "$has_card" = 1 ]; then
+  c_ok "已注册声卡 → 音频通路可用"; CAP[audio]=ok
+elif printf '%s' "$admsg" | grep -qiE 'No dais found in DT|dais.*-22|q6asm-dai.*failed'; then
+  c_warn "无声卡：DTB 的 APR dais 节点缺 DAI 子节点（q6asm-dai probe -22）→ DTB/上游缺陷，rootfs 无解，需修 DTB 或换内核"; CAP[audio]=dtb_missing_dais
+elif [ -z "$snd_node" ]; then
+  c_warn "无声卡：DT 无 sound machine 节点 → 即使 DAI 正常也不会建卡（DTB 缺陷）"; CAP[audio]=no_machine_node
+else
+  c_warn "无声卡：q6 模块/UCM 可能缺失（rootfs 侧或可补）—— 见上方 probe 链定位"; CAP[audio]=module_or_ucm
+fi
+
+# ───────────────────────────── 16. 传感器 / 自动旋转（B2）─────────────────────────────
+hdr "16. 传感器 / 自动旋转 / 贴脸熄屏 (IIO + iio-sensor-proxy)"
+acc=0; als=0; prox=0; magn=0; gyro=0
+shopt -s nullglob 2>/dev/null
+for d in /sys/bus/iio/devices/iio:device*; do
+  [ -e "$d/name" ] || continue
+  printf '  IIO %s: %s\n' "$(basename "$d")" "$(val "$d/name")"
+  ls "$d" 2>/dev/null | grep -q accel && acc=1
+  ls "$d" 2>/dev/null | grep -q illuminance && als=1
+  ls "$d" 2>/dev/null | grep -qiE 'proximity|distance' && prox=1
+  ls "$d" 2>/dev/null | grep -q magn && magn=1
+  ls "$d" 2>/dev/null | grep -q anglvel && gyro=1
+done
+shopt -u nullglob 2>/dev/null
+[ "$acc$als$prox$magn$gyro" = "00000" ] && echo "  （/sys/bus/iio 下无传感器设备）"
+echo "  传感器汇总: accel=$acc als=$als proximity=$prox magn=$magn gyro=$gyro"
+isp="未安装"
+if have monitor-sensor || systemctl list-unit-files 2>/dev/null | grep -q iio-sensor-proxy; then
+  isp="$(systemctl is-active iio-sensor-proxy 2>/dev/null || echo inactive)"
+fi
+echo "  iio-sensor-proxy: $isp"
+if [ "$acc" = 1 ] && { [ "$isp" = active ] || have monitor-sensor; }; then
+  c_ok "加速度计 + iio-sensor-proxy 就绪 → phosh 自动旋转可用"; CAP[autorotate]=yes
+elif [ "$acc" = 1 ]; then
+  c_warn "有加速度计但缺 iio-sensor-proxy → 自动旋转不可用（装 iio-sensor-proxy 即可）"; CAP[autorotate]=no_proxy
+else
+  c_info "无加速度计 IIO 设备 → 自动旋转不可用（多为 DTB 未描述传感器）"; CAP[autorotate]=no_accel
+fi
+[ "$prox" = 1 ] && c_ok "有距离传感器 → 通话贴脸熄屏可用" || c_info "无距离传感器 → 贴脸熄屏不可用"
+
+# ───────────────────────────── 17. 调制解调器（B3）─────────────────────────────
+hdr "17. 调制解调器 (remoteproc running ≠ 可用；需 ModemManager 能看到 modem)"
+mst=$(cat /sys/class/remoteproc/*/state 2>/dev/null | tr '\n' ' ')
+echo "  remoteproc 各核状态: ${mst:-?}"
+sub "ModemManager"
+mma=$(systemctl is-active ModemManager 2>/dev/null); echo "  ModemManager 服务: ${mma:-未安装}"
+nmod=0
+if have mmcli; then
+  ml=$(timeout 8 mmcli -L 2>/dev/null)
+  if [ -n "$ml" ]; then printf '%s\n' "$ml" | sed 's/^/  /'; else echo "  （mmcli -L 无输出）"; fi
+  nmod=$(printf '%s' "$ml" | grep -ciE '/Modem/[0-9]')
+else
+  c_na "mmcli (ModemManager CLI)"
+fi
+sub "QMI/MBIM/qrtr 节点"
+ls /dev/wwan* /dev/cdc-wdm* 2>/dev/null | sed 's/^/  /' || echo "  无 /dev/wwan|cdc-wdm 节点"
+have qrtr-lookup && timeout 5 qrtr-lookup 2>/dev/null | head -8 | sed 's/^/  /'
+if [ "${nmod:-0}" -ge 1 ] 2>/dev/null; then
+  c_ok "ModemManager 已识别到 modem → 移动数据/短信可配"; CAP[modem]=usable
+  timeout 8 mmcli -m 0 2>/dev/null | grep -iE 'state|signal|operator|sim|access tech' | sed 's/^/    /'
+elif printf '%s' "$mst" | grep -qw running; then
+  c_warn "modem remoteproc running 但 MM 看不到 modem → 当前不可用（sm8150 mainline 常态：需 qrtr/rmtfs 配合，通话/VoLTE 多不支持）"; CAP[modem]=rproc_only
+else
+  c_info "无 modem remoteproc / ModemManager"; CAP[modem]=absent
+fi
+
+# ───────────────────────────── 18. 挂起/恢复质量（C1，非侵入）─────────────────────────────
+hdr "18. 挂起 / 恢复质量 (非侵入：不真正挂起；真测见末尾 rtcwake 提示)"
+echo "  mem_sleep: $(val /sys/power/mem_sleep)   wakeup_count: $(val /sys/power/wakeup_count)"
+sub "休眠抑制锁 (谁在阻止 sleep/idle)"
+if have systemd-inhibit; then timeout 5 systemd-inhibit --list --no-pager 2>/dev/null | sed 's/^/  /'; else c_na "systemd-inhibit"; fi
+sub "唤醒源 (debugfs wakeup_sources，需 root+debugfs)"
+if [ -r /sys/kernel/debug/wakeup_sources ]; then
+  awk 'NR==1{print; next} (($3+0)>0 || ($4+0)>0){print}' /sys/kernel/debug/wakeup_sources 2>/dev/null | head -15 | sed 's/^/  /'
+else
+  c_info "无法读 /sys/kernel/debug/wakeup_sources（需 root 且挂载 debugfs）"
+fi
+sub "历史挂起/恢复事件 (journal)"
+sus=$(timeout 15 journalctl -b --no-pager 2>/dev/null | grep -iE 'PM: suspend|PM: resume|suspend entry|suspend exit|Freezing user space|Restarting tasks' | tail -8)
+if [ -n "$sus" ]; then
+  printf '%s\n' "$sus" | sed 's/^/  /'
+  printf '%s' "$sus" | grep -qiE 'abort|fail|error' && c_warn "历史挂起/恢复中出现 abort/fail（见上）" || c_info "本次启动有挂起/恢复记录（未见明显失败）"
+else
+  c_info "本次启动无挂起/恢复记录（未休眠过）"
+fi
+c_info "真测可手动（会真挂起，慎用）：sudo rtcwake -m freeze -s 15  然后查 journal 的 resume 段"
+CAP[suspend]="$(val /sys/power/mem_sleep | grep -oE '\[[a-z0-9]+\]' | tr -d '[]')"
+
+# ───────────────────────────── 19. 文件系统健康 & 扩容（C2）─────────────────────────────
+hdr "19. 文件系统健康 & 自动扩容核对"
+rootsrc=$(findmnt -no SOURCE / 2>/dev/null)
+echo "  / 源设备: ${rootsrc:-?}"
+if have dumpe2fs && [ -n "$rootsrc" ]; then
+  de=$(timeout 10 dumpe2fs -h "$rootsrc" 2>/dev/null)
+  fst=$(printf '%s\n' "$de" | sed -n 's/^Filesystem state: *//p')
+  echo "  Filesystem state: ${fst:-?(需 root)}"
+  printf '%s\n' "$de" | grep -iE 'Mount count|Maximum mount count|Lifetime writes|FS Error count|First error|Last error' | sed 's/^/  /'
+  case "$fst" in
+    *clean*) c_ok "ext4 状态 clean"; CAP[fs_health]=clean ;;
+    "") c_info "无法读取 ext4 superblock（需 root）"; CAP[fs_health]=unknown ;;
+    *) c_warn "ext4 状态非 clean: $fst（可能有未决错误）"; CAP[fs_health]=not_clean ;;
+  esac
+  ec=$(printf '%s\n' "$de" | sed -n 's/^FS Error count: *//p' | tr -cd '0-9')
+  [ -n "$ec" ] && [ "$ec" -gt 0 ] 2>/dev/null && c_warn "ext4 记录到 $ec 次文件系统错误（追因看 dmesg）"
+fi
+sub "自动扩容核对 (fs 大小应≈分区大小)"
+if [ -n "$rootsrc" ]; then
+  psz=$(blockdev --getsize64 "$rootsrc" 2>/dev/null)
+  fsz=$(df -B1 --output=size / 2>/dev/null | tail -1 | tr -cd '0-9')
+  if [ -n "$psz" ] && [ -n "$fsz" ] && [ "$psz" -gt 0 ] 2>/dev/null; then
+    pct=$(awk -v f="$fsz" -v p="$psz" 'BEGIN{printf "%d", f*100/p}')
+    echo "  分区=$(awk -v x="$psz" 'BEGIN{printf "%.1f", x/1073741824}')G  文件系统=$(awk -v x="$fsz" 'BEGIN{printf "%.1f", x/1073741824}')G  占比=${pct}%"
+    if [ "$pct" -ge 90 ] 2>/dev/null; then c_ok "rootfs 已扩容填满分区 (${pct}%)"; CAP[fs_resize]=ok; else c_warn "rootfs 仅占分区 ${pct}% → 首启扩容可能未完成，浪费空间"; CAP[fs_resize]=incomplete; fi
+  else
+    c_info "无法取得分区/文件系统字节数（blockdev 需权限）"; CAP[fs_resize]=unknown
+  fi
+fi
+
+# ───────────────────────────── 20. 严重事件历史（C4，深化日志）─────────────────────────────
+hdr "20. 严重事件历史 (沉默的间歇故障：OOM / rproc 崩溃 / oops / 热降频)"
+ja=$(timeout 20 journalctl -b --no-pager 2>/dev/null)
+report_cat() { # $1=label $2=pattern
+  local hits n
+  n=$(printf '%s\n' "$ja" | grep -ciE "$2")
+  if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+    c_warn "$1：${n} 次"; printf '%s\n' "$ja" | grep -iE "$2" | tail -6 | sed 's/^/    /'
+  else
+    c_ok "$1：无"
+  fi
+}
+report_cat "OOM 杀进程"          'Out of memory|oom-kill|Killed process|earlyoom.*(SIGKILL|sending)'
+report_cat "remoteproc 崩溃/恢复" 'remoteproc.*(crash|fatal|recover)|q6v5.*(fatal|crash)|rproc.*crash'
+report_cat "内核 oops/异常"      'Internal error|Call trace|kernel NULL pointer|BUG:|Unable to handle|segfault'
+report_cat "热降频/过温"         'thermal.*(throttl|trip point)|cpu[0-9].*throttl|critical temperature'
+
 # ───────────────────────────── 小结 ─────────────────────────────
 hdr "分析报告 · 小结"
 printf '\n>> 问题 ISSUE (%s):\n' "${#F_FAIL[@]}"; for x in "${F_FAIL[@]}"; do echo "   - $x"; done
@@ -382,6 +611,33 @@ printf '  %-18s : %s\n' "watchdog"        "${CAP[watchdog]:-?}（armed=自愈生
 printf '  %-18s : %s\n' "固件补齐"        "${CAP[fw_backfill]:-?}（missing=GPU/蓝牙固件未落地）"
 printf '  %-18s : %s\n' "IPv6 关闭层"     "${CAP[ipv6_layer]:-?}"
 printf '  %-18s : %s\n' "外网连通"        "${CAP[net]:-?}"
+printf '  %-18s : %s\n' "时间同步"        "${CAP[timesync]:-?}（synced=好 / clock_wrong/skewed=会崩 TLS）"
+printf '  %-18s : %s\n' "apt-mark hold"   "${CAP[apt_hold]:-?}（ok=内核已锁，防 unattended 换核变砖）"
+printf '  %-18s : %s\n' "音频"            "${CAP[audio]:-?}（dtb_missing_dais=DTB缺陷 / ok=可用）"
+printf '  %-18s : %s\n' "自动旋转"        "${CAP[autorotate]:-?}（yes=accel+proxy 就绪）"
+printf '  %-18s : %s\n' "调制解调器"      "${CAP[modem]:-?}（usable / rproc_only=起了但用不了）"
+printf '  %-18s : %s\n' "挂起模式"        "${CAP[suspend]:-?}（s2idle=浅睡 / deep=真挂起）"
+printf '  %-18s : %s\n' "文件系统"        "${CAP[fs_health]:-?}/${CAP[fs_resize]:-?}（clean/ok 为佳）"
+
+# ───────────────────────────── C3. 机器可读输出 + 基线回归 diff ─────────────────────────────
+hdr "能力矩阵 · 机器可读 (key=val；可作回归基线)"
+KV_KEYS="net nss_tls oom psi trim watchdog fw_backfill ipv6_layer timesync apt_hold audio autorotate modem suspend fs_health fs_resize"
+{ echo "# raphael caps $(date '+%F %T')"; for k in $KV_KEYS; do printf '%s=%s\n' "$k" "${CAP[$k]:-NA}"; done; } | tee "$KV" 2>/dev/null
+cp -f "$KV" "${PWD}/raphael-caps-latest.kv" 2>/dev/null
+echo "  （已写 $KV；下次用  bash device-probe.sh --baseline <旧.kv>  比对回归）"
+if [ -n "$BASELINE" ] && [ -r "$BASELINE" ]; then
+  sub "回归 diff（对比基线 $BASELINE）"
+  chg=0
+  while IFS='=' read -r k oldv; do
+    case "$k" in ''|\#*) continue ;; esac
+    newv="${CAP[$k]:-NA}"
+    [ "$oldv" = "$newv" ] && continue
+    chg=1; printf '  [Δ] %-14s %s → %s\n' "$k" "$oldv" "$newv"
+  done < "$BASELINE"
+  [ "$chg" = 0 ] && c_ok "与基线一致，无能力变化" || c_info "上面是与基线的能力变化（人工判断 ↑修复 / ↓回归）"
+elif [ -n "$BASELINE" ]; then
+  c_warn "指定的基线文件不可读: $BASELINE"
+fi
 
 printf '\n报告结束。\n'
 }
