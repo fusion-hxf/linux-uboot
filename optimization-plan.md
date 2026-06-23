@@ -118,11 +118,11 @@
 
 ### P2 — 打磨 / 技术债
 
-11. 合并重复（`blank_screen.service` 08/13、`get_packages` vs 06、清理/启用模板）。
-12. 复核 `15` 删 `regulatory.db` 对 WiFi 的影响。
-13. USB gadget 健壮性（UDC 就绪竞态），可选加 RNDIS 兼容 Windows 免装驱动。
-14. 构建可靠性：apt/curl 重试，`set -u`/`pipefail`。
-15. ⏸ **watchdog 自愈**（`RuntimeWatchdogSec`）：内核已含 `QCOM_WDT` 驱动 → 待 `device-probe.sh` 确认 `/dev/watchdog` 存在即可启用。
+11. ✅ **合并重复/删死代码**：`blank_screen.service` 统一到 `08`（删 `13` 重复）；删除未被调用的 `get_packages()`（`build-config.sh`）与未使用的 `config/*.tpl`。
+12. ✅ **regulatory.db**：`15` 不再删除 + `06` 装 `wireless-regdb`。
+13. ✅ **USB gadget 健壮性**：`setup-usb-ncm.sh` 等待 UDC/usb0 就绪再绑定，消除开机竞态。（RNDIS Windows 兼容属功能增项，暂不做。）
+14. ◑ **构建可靠性**：已加 `apt` `Acquire::Retries 3` + `curl --retry`；`set -u`/`pipefail` 易误伤现有脚本，留待一次完整构建验证后再加。
+15. ✅ **watchdog 自愈**：`13` 写 `RuntimeWatchdogSec=60s`（设备已确认 `/dev/watchdog`）。
 16. 🔍 **ramoops/pstore 崩溃日志**：内核 `CONFIG_PSTORE_RAM=y` 已开 → 可保存重启前的内核日志用于生产排障（需保留内存区，属外部 boot/内核侧）。
 
 ---

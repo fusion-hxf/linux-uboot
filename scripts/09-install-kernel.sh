@@ -71,7 +71,7 @@ fetch_fw() {
     local rel="$1" dst="rootdir/lib/firmware/$1" tmp
     if [ -e "$dst" ]; then echo "      = 保留厂商版(已存在): $rel"; return 0; fi
     tmp=$(mktemp)
-    if curl -fsSL --max-time 60 -o "$tmp" "$LF_BASE/$rel" 2>/dev/null \
+    if curl -fsSL --retry 3 --retry-delay 2 --max-time 60 -o "$tmp" "$LF_BASE/$rel" 2>/dev/null \
        && [ -s "$tmp" ] && ! head -c16 "$tmp" | grep -qiE '<!doctype|<html'; then
         mkdir -p "$(dirname "$dst")"
         install -m0644 "$tmp" "$dst"

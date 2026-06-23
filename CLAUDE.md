@@ -86,13 +86,12 @@ Pipeline phases (one concern per script):
 functions: `system_config` (image size, desktop flag, distro version defaults),
 `sources_config` (mirror URLs), and `get_packages`.
 
-**Gotcha:** `get_packages` in `config/build-config.sh` is largely *superseded* — the
-authoritative package lists are hardcoded inline in `scripts/06-install-all-packages.sh`.
-When changing what gets installed, edit `06`. Templates in `config/*.tpl` exist but the
-scripts mostly inline their `cat > rootdir/...` heredocs rather than rendering the templates.
+**Note:** package lists are hardcoded inline in `scripts/06-install-all-packages.sh` — edit `06` to
+change what gets installed. (The old superseded `get_packages()` in `config/build-config.sh` and the
+unused `config/*.tpl` templates have been removed; scripts inline their `cat > rootdir/...` heredocs.)
 
-**Gotcha:** `blank_screen.service` is defined twice (in both `08-add-screen-commands.sh`
-and `13-config-power.sh`); keep them in sync if you touch one.
+**Note:** `blank_screen.service` is defined once, in `08-add-screen-commands.sh` (the duplicate in
+`13-config-power.sh` has been removed).
 
 ## Device-specific invariants (do not change casually)
 

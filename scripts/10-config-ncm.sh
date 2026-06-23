@@ -34,8 +34,17 @@ mkdir -p $G/configs/c.1/strings/0x409
 echo NCM > $G/configs/c.1/strings/0x409/configuration
 mkdir -p $G/functions/ncm.usb0
 ln -sf $G/functions/ncm.usb0 $G/configs/c.1/
-UDC=$(ls /sys/class/udc | head -n 1)
-echo $UDC > $G/UDC
+# 等待 UDC 就绪（开机早期 USB 控制器可能尚未枚举，避免竞态失败）
+UDC=""
+for _ in $(seq 1 50); do
+    UDC=$(ls /sys/class/udc 2>/dev/null | head -n 1)
+    [ -n "$UDC" ] && break
+    sleep 0.2
+done
+[ -n "$UDC" ] || { echo "no UDC available" >&2; exit 1; }
+echo "$UDC" > $G/UDC
+# 等待 usb0 接口出现再配置
+for _ in $(seq 1 50); do ip link show usb0 >/dev/null 2>&1 && break; sleep 0.2; done
 ip link set usb0 up
 ip addr add 172.16.42.1/24 dev usb0 || true
 systemctl restart dnsmasq || true

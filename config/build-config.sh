@@ -63,47 +63,5 @@ sources_config() {
   fi
 }
 
-# 软件包配置
-get_packages() {
-  local system_type="$1"
-  local desktop_env="$2"
-  
-  base_packages="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata dnsmasq nftables iproute2"
-  
-  if [[ "$system_type" == *"debian-"* ]]; then
-    base_packages="$base_packages fonts-wqy-microhei"
-  elif [[ "$system_type" == *"ubuntu-"* ]]; then
-    base_packages="$base_packages language-pack-zh-hans"
-  fi
-  
-  if [[ "$system_type" == *"server"* ]]; then
-    echo "$base_packages"
-  else
-    case "$desktop_env" in
-      "gnome")
-        echo "$base_packages gnome gnome-terminal gdm3"
-        ;;
-      "phosh-core")
-        if [[ "$system_type" == *"ubuntu-"* ]]; then
-          echo "$base_packages phosh phoc onboard"
-        elif [[ "$system_type" == *"debian-"* ]]; then
-          echo "$base_packages phosh phoc squeekboard"
-        fi
-        ;;
-      "phosh-full")
-        if [[ "$system_type" == *"ubuntu-"* ]]; then
-          echo "$base_packages phosh phoc onboard gnome-settings-daemon gnome-control-center"
-        elif [[ "$system_type" == *"debian-"* ]]; then
-          echo "$base_packages phosh phoc squeekboard gnome-settings-daemon gnome-control-center"
-        fi
-        ;;
-      "phosh-phone")
-        echo "$base_packages phosh phoc squeekboard gnome-settings-daemon gnome-control-center ofono mobian-tweaks"
-        ;;
-      *)
-        # 默认返回基础包
-        echo "$base_packages"
-        ;;
-    esac
-  fi
-}
+# 注：软件包清单（base/device/desktop）现内联在 scripts/06-install-all-packages.sh。
+# 旧的 get_packages() 已删除——之前未被任何脚本调用（死代码）。

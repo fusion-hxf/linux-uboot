@@ -5,6 +5,12 @@ echo "[$(date +'%Y-%m-%d %H:%M:%S')] [05] 📡 更新 apt 源并更新缓存"
 
 export DEBIAN_FRONTEND=noninteractive
 
+# [技术债] apt 自动重试，降低网络抖动导致的构建失败（也写入镜像，设备端 apt 同样受益）
+mkdir -p rootdir/etc/apt/apt.conf.d
+cat > rootdir/etc/apt/apt.conf.d/80-retries << 'EOF'
+Acquire::Retries "3";
+EOF
+
 cp rootdir/etc/apt/sources.list rootdir/etc/apt/sources.list.bak
 
 if [[ "$SYSTEM_TYPE" == *"ubuntu-"* ]]; then
