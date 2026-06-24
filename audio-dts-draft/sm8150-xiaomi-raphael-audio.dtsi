@@ -1,0 +1,228 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * raphael (Redmi K20 Pro / sm8150) 音频 bring-up 草稿
+ * ---------------------------------------------------------------------------
+ * 把本文件的内容【合并进】 arch/arm64/boot/dts/qcom/sm8150-xiaomi-raphael.dts
+ *（或在该 .dts 末尾 #include 本文件）。需要在 .dts 顶部补一行头文件：
+ *     #include <dt-bindings/sound/qcom,q6asm.h>
+ *（qcom,q6afe.h 已由 sm8150.dtsi 引入；gpio.h / irq.h 也已有。）
+ *
+ * 模板来源：mainline sdm845-db845c.dts + sdm845-wcd9340.dtsi（同 WCD9340 / 同 APR 架构）
+ * 接线来源：LineageOS android_kernel_xiaomi_sm8150 下游 raphael DTS（见 audio-bringup-plan.md §7b）
+ *
+ * 分两阶段验证：
+ *   阶段1（首要目标）：声卡注册 + q6asm-dai bind（消除 "No dais found in DT / -22"）。
+ *                      只要节点结构合法即可达成，pin/routing 不全也能注册。
+ *   阶段2：音频真正出声/录音——需 pinctrl 与 audio-routing 精确（见各 TODO）。
+ *
+ * 所有标 /* TODO */ 处为需在设备上按 dmesg 收敛的不确定项。
+ */
+
+/* ======================= 前端 DAI（q6asm，MultiMedia1-5）======================= */
+/* 填充 sm8150.dtsi 里空的 q6asmdai。UCM 用到 MM1-5。 */
+&q6asmdai {
+	dai@0 { reg = <MSM_FRONTEND_DAI_MULTIMEDIA1>; };	/* 扬声器播放 */
+	dai@1 { reg = <MSM_FRONTEND_DAI_MULTIMEDIA2>; };	/* 耳机播放 */
+	dai@2 { reg = <MSM_FRONTEND_DAI_MULTIMEDIA3>; };	/* 录音（底麦） */
+	dai@3 { reg = <MSM_FRONTEND_DAI_MULTIMEDIA4>; };	/* 录音（顶麦） */
+	dai@4 { reg = <MSM_FRONTEND_DAI_MULTIMEDIA5>; };	/* 录音（耳机麦） */
+};
+
+/* ======================= 后端 DAI（q6afe）======================= */
+/* SLIMBus 端口无需 DT 子节点（驱动已注册，dai-link 里用 <&q6afedai SLIMBUS_x> 直接引用）。
+ * 仅 MI2S 需要子节点声明 sd-lines。raphael 扬声器走 QUAT MI2S 的 sd0/sd1（下游 quat_mi2s_sd0/sd1）。*/
+&q6afedai {
+	dai@22 {
+		reg = <QUATERNARY_MI2S_RX>;
+		qcom,sd-lines = <0 1>;	/* 下游 quat_mi2s_sd0 + sd1 */
+	};
+};
+
+/* ======================= 声卡 machine ======================= */
+&sound {
+	compatible = "qcom,sm8150-sndcard";	/* 由 CONFIG_SND_SOC_SM8150 驱动 */
+	model = "Xiaomi-Redmi-K20-Pro";
+
+	/* TODO[阶段2]: 确认 sm8150.dtsi 是否已有 quat_mi2s pinmux 组；
+	 * 若无，需在下方 &tlmm 补 quat_mi2s_active/_sleep（本文件已给占位）。*/
+	pinctrl-names = "default";
+	pinctrl-0 = <&quat_mi2s_active>;
+
+	/* audio-routing：取自下游 raphael-audio-overlay.dtsi（WCD934x widget 名 mainline 通用）。
+	 * TODO[阶段2]: 逐条核对 mainline wcd934x 的 widget 名（如 LINEOUT/AMIC/MIC BIAS）。*/
+	audio-routing =
+		"RX_BIAS", "MCLK",
+		"AMIC1", "MIC BIAS1",
+		"AMIC2", "MIC BIAS2",
+		"AMIC3", "MIC BIAS3",
+		"AMIC4", "MIC BIAS1",
+		"AMIC5", "MIC BIAS4";
+
+	/* ---- 前端（FE）---- */
+	mm1-dai-link {
+		link-name = "MultiMedia1";
+		cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>; };
+	};
+	mm2-dai-link {
+		link-name = "MultiMedia2";
+		cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>; };
+	};
+	mm3-dai-link {
+		link-name = "MultiMedia3";
+		cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA3>; };
+	};
+	mm4-dai-link {
+		link-name = "MultiMedia4";
+		cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA4>; };
+	};
+	mm5-dai-link {
+		link-name = "MultiMedia5";
+		cpu { sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA5>; };
+	};
+
+	/* ---- 后端（BE）：扬声器 = QUAT MI2S -> TFA9872 ---- */
+	speaker-dai-link {
+		link-name = "Speaker Playback";
+		cpu { sound-dai = <&q6afedai QUATERNARY_MI2S_RX>; };
+		platform { sound-dai = <&q6routing>; };
+		codec { sound-dai = <&tfa9872>; };
+	};
+
+	/* ---- 后端（BE）：耳机/听筒/麦 = SLIMBus <-> WCD9340 ----
+	 * 先按 db845c 最小可用路径（AIF1: SLIMBUS_0_RX/TX）让卡先注册；
+	 * TODO[阶段2]: 按 UCM 改成 SLIMBUS_6_RX(耳机) / SLIMBUS_1_TX,2_TX,5_TX(各麦)。*/
+	slim-play-dai-link {
+		link-name = "SLIM Playback";
+		cpu { sound-dai = <&q6afedai SLIMBUS_0_RX>; };
+		platform { sound-dai = <&q6routing>; };
+		codec { sound-dai = <&wcd9340 0>; };	/* AIF1_PB */
+	};
+	slim-cap-dai-link {
+		link-name = "SLIM Capture";
+		cpu { sound-dai = <&q6afedai SLIMBUS_0_TX>; };
+		platform { sound-dai = <&q6routing>; };
+		codec { sound-dai = <&wcd9340 1>; };	/* AIF1_CAP */
+	};
+};
+
+/* ======================= WCD9340（tavil）codec on SLIMBus =======================
+ * 移植自 sdm845-wcd9340.dtsi；raphael 无 WSA（wsa-max-devs=0），故删去 SoundWire 音箱。
+ * GPIO：CODEC_RST_N=143, CODEC_INT1_N=123（见 raphael.dts pinctrl gpio-line-names）。
+ * 供电：与 db845c 同——全部 vreg_s4a_1p8（设备实测该 1.8V 轨存在）。*/
+&slim {
+	status = "okay";
+
+	slim@1 {
+		reg = <1>;
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		wcd9340_ifd: ifd@0,0 {
+			compatible = "slim217,250";
+			reg = <0 0>;
+		};
+
+		wcd9340: codec@1,0 {
+			compatible = "slim217,250";
+			reg = <1 0>;
+			slim-ifc-dev = <&wcd9340_ifd>;
+
+			#sound-dai-cells = <1>;
+
+			/* CODEC_INT1_N = GPIO123 */
+			interrupts-extended = <&tlmm 123 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
+
+			/* TODO: 确认 sm8150 rpmhcc 有 RPMH_LN_BB_CLK2（db845c/sdm845 用此为 codec mclk）*/
+			clock-names = "extclk";
+			clocks = <&rpmhcc RPMH_LN_BB_CLK2>;
+			#clock-cells = <0>;
+			clock-frequency = <9600000>;
+			clock-output-names = "mclk";
+
+			pinctrl-0 = <&wcd_intr_default>;
+			pinctrl-names = "default";
+
+			/* CODEC_RST_N = GPIO143 */
+			reset-gpios = <&tlmm 143 GPIO_ACTIVE_HIGH>;
+
+			vdd-buck-supply = <&vreg_s4a_1p8>;
+			vdd-buck-sido-supply = <&vreg_s4a_1p8>;
+			vdd-tx-supply = <&vreg_s4a_1p8>;
+			vdd-rx-supply = <&vreg_s4a_1p8>;
+			vdd-io-supply = <&vreg_s4a_1p8>;
+
+			qcom,micbias1-microvolt = <1800000>;
+			qcom,micbias2-microvolt = <1800000>;
+			qcom,micbias3-microvolt = <1800000>;
+			qcom,micbias4-microvolt = <1800000>;
+
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			wcdgpio: gpio-controller@42 {
+				compatible = "qcom,wcd9340-gpio";
+				gpio-controller;
+				#gpio-cells = <2>;
+				reg = <0x42 0x2>;
+			};
+
+			swm: soundwire@c85 {
+				compatible = "qcom,soundwire-v1.3.0";
+				reg = <0xc85 0x40>;
+				interrupts-extended = <&wcd9340 20>;
+				qcom,dout-ports = <6>;
+				qcom,din-ports = <2>;
+				qcom,ports-sinterval-low = /bits/ 8 <0x07 0x1f 0x3f 0x7 0x1f 0x3f 0x0f 0x0f>;
+				qcom,ports-offset1 = /bits/ 8 <0x01 0x02 0x0c 0x6 0x12 0x0d 0x07 0x0a>;
+				qcom,ports-offset2 = /bits/ 8 <0x00 0x00 0x1f 0x00 0x00 0x1f 0x00 0x00>;
+				#sound-dai-cells = <1>;
+				clocks = <&wcd9340>;
+				clock-names = "iface";
+				#address-cells = <2>;
+				#size-cells = <0>;
+			};
+		};
+	};
+};
+
+/* ======================= TFA9872 扬声器功放 on I2C =======================
+ * 下游：qupv3_se1_i2c @ 0x34，reset GPIO59(SPKR_PA_RST)，irq GPIO141(SPKR_INT)。
+ * mainline i2c1 = i2c@884000 = QUP SE1。驱动 = GengWei raphael-7.1 的 tfa9872（nxp,tfa9872/9874）。*/
+&i2c1 {
+	status = "okay";
+	clock-frequency = <400000>;
+
+	tfa9872: speaker-amp@34 {
+		compatible = "nxp,tfa9872";	/* TODO: 若实测为 tfa9874 改之；驱动两者都认 */
+		reg = <0x34>;
+		#sound-dai-cells = <0>;
+		/* SPKR_PA_RST = GPIO59；SPKR_INT = GPIO141 */
+		reset-gpios = <&tlmm 59 GPIO_ACTIVE_HIGH>;	/* TODO: 核对 tfa9872 驱动是否读 reset-gpios */
+		interrupt-parent = <&tlmm>;
+		interrupts = <141 IRQ_TYPE_EDGE_FALLING>;
+		/* TODO[阶段2]: pinctrl smartpa_int/enable（见下方 &tlmm 占位）*/
+	};
+};
+
+/* ======================= pinctrl 占位 =======================
+ * TODO[阶段2]: 以下 GPIO/function 需按 raphael 下游 pinctrl 填准确值。
+ * 卡的注册（阶段1）不依赖这些；音频实际出声（阶段2）才需要。*/
+&tlmm {
+	/* WCD9340 中断脚（CODEC_INT1_N = GPIO123）*/
+	wcd_intr_default: wcd-intr-default-state {
+		pins = "gpio123";
+		function = "gpio";
+		bias-pull-down;
+		drive-strength = <2>;
+	};
+
+	/* QUAT MI2S（扬声器 I2S）—— TODO: 填准确 GPIO（下游 SPKR_I2S_BCK/WS/DOUT/DIN）*/
+	quat_mi2s_active: quat-mi2s-active-state {
+		/* TODO: pins = "gpioXXX..."; function = "mi2s..."; */
+	};
+	quat_mi2s_sleep: quat-mi2s-sleep-state {
+		/* TODO */
+	};
+};
