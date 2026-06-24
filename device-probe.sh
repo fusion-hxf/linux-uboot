@@ -121,7 +121,8 @@ if dpkg -l 2>/dev/null | grep -qiE '^ii +(nss-tlsd|libnss-tls)'; then
 fi
 sub "systemd-resolved"
 echo "  enabled: $(systemctl is-enabled systemd-resolved 2>/dev/null)  active: $(systemctl is-active systemd-resolved 2>/dev/null)"
-have resolvectl && timeout 5 resolvectl status 2>/dev/null | sed -n '1,20p'
+# [精简] 只摘关键三行，不再整段打印每个 link 的协议表
+have resolvectl && timeout 5 resolvectl status 2>/dev/null | grep -E 'resolv.conf mode|Fallback DNS|Current DNS Server' | sed 's/^ */  /'
 # [改进] 残留 resolvconf/openresolv 检测（日志 "Failed to set DNS configuration ... network1 not found" 之源）
 if dpkg -l 2>/dev/null | grep -qiE '^ii +(resolvconf|openresolv) '; then c_warn "resolvconf/openresolv 仍安装，会与 systemd-resolved 冲突（日志报 network1.service not found）"; fi
 sub "解析延迟实测 —— getaddrinfo/NSS 路径 (curl/apt 真实走这条)"
@@ -179,13 +180,16 @@ fi
 
 # ───────────────────────────── 6. 存储 ─────────────────────────────
 hdr "6. 存储 (TRIM / noatime / /boot 余量)"
-lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT 2>/dev/null
+# [精简] 手机 GPT 有 90+ 分区，只列带文件系统/swap 的块设备，不再整树打印
+lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT 2>/dev/null | awk 'NR==1 || $3 ~ /ext4|vfat|swap|f2fs|btrfs/'
 sub "挂载选项"
 echo "  / :    $(findmnt -no SOURCE,FSTYPE,OPTIONS / 2>/dev/null)"
 echo "  /boot: $(findmnt -no SOURCE,FSTYPE,OPTIONS /boot 2>/dev/null)"
 findmnt -no OPTIONS / 2>/dev/null | grep -qw noatime && c_ok "/ 已启用 noatime" || c_info "/ 未用 noatime（P0/P1 重建镜像后生效）"
 sub "TRIM / discard 支持"
-lsblk -D -o NAME,DISC-GRAN,DISC-MAX,MOUNTPOINT 2>/dev/null
+# [精简] 只看根设备的 discard 粒度/上限，判定仍按全盘扫描
+rdev=$(findmnt -no SOURCE / 2>/dev/null)
+echo "  / 源设备 $rdev : $(lsblk -D -no NAME,DISC-GRAN,DISC-MAX "$rdev" 2>/dev/null | head -1)"
 if lsblk -D -bn -o DISC-MAX 2>/dev/null | awk '{if($1+0>0)f=1} END{exit !f}'; then
   c_ok "块层支持 discard（fstrim 可生效）"; CAP[trim]=yes
 else
@@ -228,16 +232,19 @@ case "$(val /sys/power/mem_sleep)" in
   *'[s2idle]'*) c_info "仅 s2idle（mainline 常态；深睡眠未必可用）" ;;
 esac
 sub "thermal zones（当前温度）"
-hot=0
+# [精简] 不再逐区打印（手机有 ~28 个热区），只给最高温/最热区/区数
+hot=0; nz=0; maxc=0; maxz=""
 for z in /sys/class/thermal/thermal_zone*; do
   [ -e "$z/temp" ] || continue
   t=$(val "$z/temp"); ty=$(val "$z/type")
   [ -n "$t" ] || continue
+  nz=$((nz+1))
   c=$(awk -v x="$t" 'BEGIN{printf "%.1f", x/1000}')
-  printf '  %-26s %s C\n' "$ty" "$c"
+  gt "$c" "$maxc" && { maxc=$c; maxz=$ty; }
   gt "$c" 80 && hot=1
 done
-[ "$hot" = 1 ] && c_warn "有热区 >80°C（注意散热/负载）" || c_ok "温度正常"
+echo "  热区数=$nz  最高温=${maxz:-?} ${maxc}°C"
+[ "$hot" = 1 ] && c_warn "有热区 >80°C（注意散热/负载）" || c_ok "温度正常（最高 ${maxc}°C）"
 sub "电池"
 for b in /sys/class/power_supply/*; do
   [ -e "$b/capacity" ] || continue
@@ -337,11 +344,8 @@ if have hciconfig; then timeout 5 hciconfig 2>/dev/null | head -3
 elif have bluetoothctl; then timeout 5 bluetoothctl list 2>/dev/null
 else c_na "蓝牙 CLI 工具"; fi
 sub "音频"
-# [改进] 先看声卡是否注册（与 alsa-utils 是否安装无关）：q6asm-dai probe 失败会导致无声卡
-echo "  /proc/asound/cards:"; sed 's/^/    /' /proc/asound/cards 2>/dev/null || echo "    (无)"
-if grep -qE '^[[:space:]]*[0-9]+[[:space:]]*\[' /proc/asound/cards 2>/dev/null; then c_ok "已注册声卡"; else c_warn "无声卡注册（常因 q6asm-dai 探测失败 / ADSP 音频通路未起）"; fi
-have aplay && aplay -l 2>/dev/null | grep -i card | sed 's/^/  /'
-have pactl && timeout 5 pactl info 2>/dev/null | grep -iE 'Server|Default Sink' | sed 's/^/  /'
+# [去重] 声卡判定与根因定位统一在 §15（音频链路根因），此处只给一行状态，不重复报 WARN
+if grep -qE '^[[:space:]]*[0-9]+[[:space:]]*\[' /proc/asound/cards 2>/dev/null; then echo "  已注册声卡（详见 §15）"; else echo "  无声卡注册 → 根因见 §15 音频链路根因定位"; fi
 sub "触摸屏 / 输入"
 grep -iE 'Name=.*(touch|fts|goodix|synaptics|nvt|focal)' /proc/bus/input/devices 2>/dev/null | sed 's/^/  /' || c_info "input 设备里未匹配到触摸关键字"
 sub "GPU / DRM"
@@ -412,14 +416,21 @@ hdr "14. 包状态 / apt-mark hold (内核被 unattended-upgrade 换掉=变砖)"
 if have apt-mark; then
   holds=$(apt-mark showhold 2>/dev/null)
   echo "  当前 hold 列表:"; printf '%s\n' "${holds:-（空）}" | sed 's/^/    /'
-  kpkgs=$(dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /^linux-(image|headers)-[0-9]/ {print $2}')
+  # 注意：被 hold 的包在 dpkg -l 里首列是 'hi'（hold+installed）而非 'ii'，故匹配 ^[hi]i
+  kpkgs=$(dpkg -l 2>/dev/null | awk '/^[hi]i / && $2 ~ /^linux-(image|headers)-[0-9]/ {print $2}')
   echo "  已安装内核包: ${kpkgs:-（无）}"
   miss=0
-  for p in $kpkgs; do printf '%s\n' "$holds" | grep -qxF "$p" || { c_fail "内核包未 hold: $p（apt / unattended-upgrades 可能替换 → 变砖）"; miss=1; }; done
-  if dpkg -l firmware-xiaomi-raphael >/dev/null 2>&1; then
-    printf '%s\n' "$holds" | grep -qxF firmware-xiaomi-raphael || { c_warn "固件包未 hold: firmware-xiaomi-raphael"; miss=1; }
+  # 主判据：showhold 里是否有 linux-image 内核（showhold 不受 hi/ii 列影响，最可靠）
+  kheld=$(printf '%s\n' "$holds" | grep -E '^linux-image-[0-9]')
+  if [ -n "$kheld" ]; then
+    c_ok "内核已 apt-mark hold（$(printf '%s' "$kheld" | tr '\n' ' ')）"
+  else
+    c_fail "未发现被 hold 的 linux-image 内核（apt / unattended-upgrades 可能替换 → 变砖）"; miss=1
   fi
-  if [ "$miss" = 0 ] && [ -n "$kpkgs" ]; then c_ok "内核/固件均已 apt-mark hold"; CAP[apt_hold]=ok; else CAP[apt_hold]=incomplete; fi
+  if dpkg -l firmware-xiaomi-raphael 2>/dev/null | grep -q '^[hi]i '; then
+    printf '%s\n' "$holds" | grep -qxF firmware-xiaomi-raphael || { c_warn "固件包 firmware-xiaomi-raphael 未 hold"; miss=1; }
+  fi
+  [ "$miss" = 0 ] && CAP[apt_hold]=ok || CAP[apt_hold]=incomplete
 else
   c_na "apt-mark"; CAP[apt_hold]=unknown
 fi
@@ -452,7 +463,12 @@ done
 shopt -u nullglob 2>/dev/null
 sub "DT 音频节点 (machine driver / DAI)"
 snd_node=$(ls -d /proc/device-tree/sound* /proc/device-tree/*/sound* 2>/dev/null | head -1)
-if [ -n "$snd_node" ]; then echo "  DT sound 节点: $snd_node (compatible=$(tr -d '\0' < "$snd_node/compatible" 2>/dev/null))"; else echo "  DT 无顶层 sound 节点"; fi
+if [ -n "$snd_node" ]; then
+  compat=$(cat "$snd_node/compatible" 2>/dev/null | tr -d '\0')
+  echo "  DT sound 节点: $snd_node (compatible=${compat:-无/空})"
+else
+  echo "  DT 无顶层 sound 节点"
+fi
 dais_node=$(find /proc/device-tree -maxdepth 6 -type d -name 'dais' 2>/dev/null | head -1)
 if [ -n "$dais_node" ]; then
   daichild=$(find "$dais_node" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
@@ -508,8 +524,9 @@ echo "  remoteproc 各核状态: ${mst:-?}"
 sub "ModemManager"
 mma=$(systemctl is-active ModemManager 2>/dev/null); echo "  ModemManager 服务: ${mma:-未安装}"
 nmod=0
+nocolor='s/\x1b\[[0-9;]*m//g'   # 去掉 mmcli 的 ANSI 颜色码
 if have mmcli; then
-  ml=$(timeout 8 mmcli -L 2>/dev/null)
+  ml=$(timeout 8 mmcli -L 2>/dev/null | sed -r "$nocolor")
   if [ -n "$ml" ]; then printf '%s\n' "$ml" | sed 's/^/  /'; else echo "  （mmcli -L 无输出）"; fi
   nmod=$(printf '%s' "$ml" | grep -ciE '/Modem/[0-9]')
 else
@@ -519,8 +536,13 @@ sub "QMI/MBIM/qrtr 节点"
 ls /dev/wwan* /dev/cdc-wdm* 2>/dev/null | sed 's/^/  /' || echo "  无 /dev/wwan|cdc-wdm 节点"
 have qrtr-lookup && timeout 5 qrtr-lookup 2>/dev/null | head -8 | sed 's/^/  /'
 if [ "${nmod:-0}" -ge 1 ] 2>/dev/null; then
-  c_ok "ModemManager 已识别到 modem → 移动数据/短信可配"; CAP[modem]=usable
-  timeout 8 mmcli -m 0 2>/dev/null | grep -iE 'state|signal|operator|sim|access tech' | sed 's/^/    /'
+  mdet=$(timeout 8 mmcli -m 0 2>/dev/null | sed -r "$nocolor")
+  printf '%s\n' "$mdet" | grep -iE 'state|signal|operator|sim|access tech' | sed 's/^/    /'
+  if printf '%s' "$mdet" | grep -qiE 'sim-missing|state: *failed'; then
+    c_info "ModemManager 识别到 modem 但未就绪（state=failed / sim-missing；多为未插 SIM，插卡后可用）"; CAP[modem]=detected_nosim
+  else
+    c_ok "ModemManager 识别到 modem 且未报错 → 移动数据/短信可配"; CAP[modem]=usable
+  fi
 elif printf '%s' "$mst" | grep -qw running; then
   c_warn "modem remoteproc running 但 MM 看不到 modem → 当前不可用（sm8150 mainline 常态：需 qrtr/rmtfs 配合，通话/VoLTE 多不支持）"; CAP[modem]=rproc_only
 else
@@ -591,9 +613,11 @@ report_cat() { # $1=label $2=pattern
     c_ok "$1：无"
   fi
 }
-report_cat "OOM 杀进程"          'Out of memory|oom-kill|Killed process|earlyoom.*(SIGKILL|sending)'
+# OOM：只匹配"真杀进程"（earlyoom 杀日志带 'to process <pid>'），排除其启动横幅("…when mem avail<=")
+report_cat "OOM 实际杀进程"      'oom-kill|Out of memory|Killed process|earlyoom.*sending SIG(TERM|KILL) to process [0-9]'
 report_cat "remoteproc 崩溃/恢复" 'remoteproc.*(crash|fatal|recover)|q6v5.*(fatal|crash)|rproc.*crash'
-report_cat "内核 oops/异常"      'Internal error|Call trace|kernel NULL pointer|BUG:|Unable to handle|segfault'
+# backtrace 含 WARN_ON splat（未必致命）与真 Oops；故标注需看上下文
+report_cat "内核 backtrace/告警 (含 WARN_ON，需看上下文)" 'Internal error|kernel NULL pointer|BUG:|Unable to handle|segfault|Call trace'
 report_cat "热降频/过温"         'thermal.*(throttl|trip point)|cpu[0-9].*throttl|critical temperature'
 
 # ───────────────────────────── 小结 ─────────────────────────────
