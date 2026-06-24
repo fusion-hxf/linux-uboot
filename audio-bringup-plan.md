@@ -146,9 +146,12 @@ dtc -I dtb -O dts /tmp/dtbo.img > /tmp/dtbo.dts   # 或 python3 extract-dtb
 - [x] 设备上跑 `audio-collect.sh`（确认 SLIMBus 空 / codec/amp 未声明 / 配置缺 WCD934x）
 - [x] 下游接线恢复（设备 DTB 已擦，改从 LineageOS 源取齐，见 §7b）
 - [x] 起草音频 DTS → `audio-dts-draft/sm8150-xiaomi-raphael-audio.dtsi`（以 db845c 为骨架 + §7b 接线）
-- [ ] 在内核源树应用草稿 + 改 `raphael.config`（见 `audio-dts-draft/README.md`），编译
-- [ ] 阶段1 验证：声卡注册 / `q6asm-dai` bind（`device-probe.sh §15` 应翻为 `audio=ok`）
-- [ ] 阶段2 验证：收敛 pinctrl/routing TODO，UCM 加载放音/录音
+- [x] 在内核源树 `linux/` 应用草稿（拷入 dtsi + raphael.dts 加 q6asm.h 头 + 末尾 include）+ 改 `kernel-deb/raphael.config`（加 MFD_WCD934X/SND_SOC_WCD934X/SOUNDWIRE）
+- [x] cpp 预处理验证通过（include 解析、所有宏→数字、无残留宏名）；i2c1 自带 pinctrl（TFA 可探测）
+- [ ] 编译（用户全工具链）→ 烧录测试
+- [ ] 阶段1a：`q6asm-dai` bind（dais 有子节点 → 消除 `-22`，独立于 codec）
+- [ ] 阶段1b：声卡注册（需 tfa9872 + wcd9340 都探测成功，否则 sndcard 会 EPROBE_DEFER）
+- [ ] 阶段2：收敛 pinctrl/routing TODO，UCM 放音/录音
 - [ ] `raphael.config` 加 `CONFIG_MFD_WCD934X=m` + `CONFIG_SND_SOC_WCD934X=m`
 - [ ] 本地编译（照 `kernel-deb/raphael-kernel_build.sh`）→ 验证 `q6asm-dai` bind、声卡注册、`aplay -l` 有卡
 - [ ] UCM 已就绪，声卡起来后直接验证播放/录音通路
