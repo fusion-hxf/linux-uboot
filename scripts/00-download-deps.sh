@@ -22,7 +22,7 @@ curl -fsSL --retry 3 --retry-delay 2 -o xiaomi-raphael-debs_$KERNEL_VERSION/firm
 
 echo "正在下载 boot.img..."
 curl -fsSL --retry 3 --retry-delay 2 -o xiaomi-k20pro-boot.img \
-    "https://github.com/GengWei1997/kernel-deb/releases/download/v1.0.0/xiaomi-k20pro-boot.img"
+    "https://github.com/fusion-hxf/kernel-deb/releases/download/v1.0.0/xiaomi-k20pro-boot.img"
 
 echo ""
 echo "下载完成!"

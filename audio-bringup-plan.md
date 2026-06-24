@@ -23,7 +23,7 @@ q6asm-dai ... probe with driver q6asm-dai failed with error -22
 
 → 这是 mainline qcom 的约定：`.dtsi` 给空壳，音频整套留给**板级 dts** 填；raphael 这份移植**没做音频 bring-up**（引脚铺好，节点没接）。
 
-内核源：`https://github.com/GengWei1997/linux.git` 分支 `raphael-7.1`
+内核源：`https://github.com/fusion-hxf/linux.git` 分支 `raphael-7.1`
 （构建封装在本仓库同级 `kernel-deb/`：`raphael-kernel_build.sh` + `raphael.config` + `builddeb.patch`）
 
 ---
@@ -98,7 +98,7 @@ dtc -I dtb -O dts /tmp/dtbo.img > /tmp/dtbo.dts   # 或 python3 extract-dtb
 
 ## 6. 社区 / 上游进展（调研结论）
 
-- **`gitlab.com/sm8150-mainline/linux`** = sm8150 主线化总枢纽（raphael / 小米 Pad5 / OnePlus7 / Sony；GengWei1997 fork 自它）。
+- **`gitlab.com/sm8150-mainline/linux`** = sm8150 主线化总枢纽（raphael / 小米 Pad5 / OnePlus7 / Sony；fusion-hxf fork 自它）。
   全仓搜 `qcom,sm8150-sndcard` / `q6asmdai` = **0 命中**；其 raphael.dts(6.17, 1086 行)亦无音频。
 - **确证：mainline + 所有 WIP 树，无任何 sm8150 设备接了 WCD9340 声卡。**
 - 高通 QDSP6/ADSP 音频栈**成熟**（Linaro Srinivas Kandagatla 2018 起主线化；AudioReach/q6apm 2021；USB offload Linux 6.16）。
@@ -159,7 +159,7 @@ dtc -I dtb -O dts /tmp/dtbo.img > /tmp/dtbo.dts   # 或 python3 extract-dtb
 
 ## 关键链接
 
-- 内核源：https://github.com/GengWei1997/linux （分支 raphael-7.1）
+- 内核源：https://github.com/fusion-hxf/linux （分支 raphael-7.1）
 - sm8150 主线枢纽：https://gitlab.com/sm8150-mainline/linux
 - db845c 参照：torvalds/linux `arch/arm64/boot/dts/qcom/sdm845-db845c.dts`
 - realme5 下游接线：https://github.com/realme-kernel-opensource/realme5-kernel-source `.../19631/sm8150-audio-overlay.dtsi`

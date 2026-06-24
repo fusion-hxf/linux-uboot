@@ -27,7 +27,7 @@ Fetch those prerequisites first (not called by `build.sh`):
 
 ```bash
 # scripts/00-download-deps.sh <KERNEL_VERSION> <GH_REPO>
-bash scripts/00-download-deps.sh 7.1 GengWei1997/kernel-deb
+bash scripts/00-download-deps.sh 7.1 fusion-hxf/kernel-deb
 ```
 
 Then build one image:
@@ -172,8 +172,8 @@ at repo root): IPv6 re-enable layer, suspend quality.
 
 Kernel/firmware debs and the boot image come from external GitHub releases, not this repo:
 
-- Kernel debs: `GengWei1997/kernel-deb` (or override repo), release tag `kernel-v<version>`.
-- `xiaomi-k20pro-boot.img`: `GengWei1997/kernel-deb` release `v1.0.0`.
+- Kernel debs: `fusion-hxf/kernel-deb` (or override repo), release tag `kernel-v<version>`.
+- `xiaomi-k20pro-boot.img`: `fusion-hxf/kernel-deb` release `v1.0.0`.
 - `alsa-xiaomi-raphael.deb`: only downloaded/installed for `phosh`/`gnome` desktop builds.
 
 **Defaults:** kernel version defaults to `7.1` everywhere (`build.sh`, `00-download-deps.sh`, CI). The
@@ -186,7 +186,7 @@ explicitly to build Debian or kernel 6.18/7.0.
 `.github/workflows/build-system.yml` is **`workflow_dispatch` only** (manual; the push/PR
 auto-triggers were removed). With defaults it builds a single `ubuntu-server` + kernel `7.1` +
 `resolute` image (the matrix generator also has `${VAR:-default}` fallbacks so empty inputs still
-produce that one image). `KERNEL_REPO` falls back to `GengWei1997/kernel-deb`. Builds run on
+produce that one image). `KERNEL_REPO` falls back to `fusion-hxf/kernel-deb`. Builds run on
 `ubuntu-24.04-arm`, download the external artifacts in parallel, run `build.sh`, then package
 `.7z` + `.sha256`. The `release` job publishes to a single `latest` GitHub Release; images larger
 than 2 GB are left in Artifacts only.

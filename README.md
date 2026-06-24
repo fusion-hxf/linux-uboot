@@ -57,7 +57,7 @@
 
 ### 方式一：下载预构建镜像
 
-项目持续自动构建最新镜像，可直接前往 [Releases](https://github.com/GengWei1997/linux-xiaomi-raphael-uboot/releases) 页面下载，无需本地编译。
+项目持续自动构建最新镜像，可直接前往 [Releases](https://github.com/fusion-hxf/linux-uboot/releases) 页面下载，无需本地编译。
 
 > **⚠️ 大文件提示**：`ubuntu-gnome-6.18` / `ubuntu-gnome-7.0` 镜像体积超过 2GB，未上传至 Releases，需前往项目 Artifacts 下载。
 > 
@@ -132,13 +132,13 @@
 官方原始链接：
 
 ```Plain Text
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/GengWei1997/kernel-deb/refs/heads/main/Update-kernel.sh)"
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/fusion-hxf/kernel-deb/refs/heads/main/Update-kernel.sh)"
 ```
 
 国内加速链接：
 
 ```Plain Text
-sudo bash -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/GengWei1997/kernel-deb/refs/heads/main/ghproxy-Update-kernel.sh)"
+sudo bash -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/fusion-hxf/kernel-deb/refs/heads/main/ghproxy-Update-kernel.sh)"
 ```
 
 脚本执行完成后，重启设备即可生效新内核。
@@ -151,7 +151,7 @@ sudo bash -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/
 
 2. 在电脑上安装 `adb`、`fastboot` 刷机工具，并配置环境变量
 
-3. 解压下载的 `.7z` 镜像压缩包，获取 `rootfs.img`、`xiaomi-k20pro-boot.img` 下载[u-boot.img](https://github.com/GengWei1997/linux-xiaomi-raphael-uboot/releases/tag/v1.0.0)（选择最近日期版本）
+3. 解压下载的 `.7z` 镜像压缩包，获取 `rootfs.img`、`xiaomi-k20pro-boot.img` 下载[u-boot.img](https://github.com/fusion-hxf/linux-uboot/releases/tag/v1.0.0)（选择最近日期版本）
 
 ### 刷机命令
 

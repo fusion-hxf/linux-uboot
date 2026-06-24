@@ -55,7 +55,7 @@
 | `desktop_environments`（桌面环境） | `phosh-core` | 仅对 `*-phosh` 生效：`phosh-core`/`phosh-full`/`phosh-phone` |
 | `debian_versions`（Debian 版本） | `trixie` | 仅对 `debian-*` 生效 |
 | `ubuntu_versions`（Ubuntu 版本） | `resolute` | 仅对 `ubuntu-*` 生效（resolute = 26.04） |
-| `kernel_repository`（内核包仓库） | `GengWei1997/kernel-deb` | 预编译内核/固件/boot 来源。**保持默认**（你不自己编内核） |
+| `kernel_repository`（内核包仓库） | `fusion-hxf/kernel-deb` | 预编译内核/固件/boot 来源。**保持默认**（你不自己编内核） |
 
 **`system_types` 可选值**：`debian-server` / `debian-gnome` / `debian-phosh` / `ubuntu-server` / `ubuntu-gnome` / `ubuntu-phosh`。
 
@@ -73,7 +73,7 @@ system_types       = ubuntu-server
 kernel_versions    = 7.1
 ubuntu_versions    = resolute
 bootstrap_tools    = mmdebstrap
-kernel_repository  = GengWei1997/kernel-deb
+kernel_repository  = fusion-hxf/kernel-deb
 ```
 
 **B. Ubuntu Phosh 移动桌面、7.1**：
@@ -102,7 +102,7 @@ ubuntu_versions = resolute
 ## 6. 刷机
 
 解压 `.7z` 得到 `rootfs.img` 与 `xiaomi-k20pro-boot.img`；`u-boot.img` 从
-[linux-xiaomi-raphael-uboot 的 Releases](https://github.com/GengWei1997/linux-xiaomi-raphael-uboot/releases)（取最近日期版本）下载。
+[linux-xiaomi-raphael-uboot 的 Releases](https://github.com/fusion-hxf/linux-uboot/releases)（取最近日期版本）下载。
 
 ```bash
 adb reboot bootloader
@@ -151,6 +151,6 @@ earlyoom 运行、`RuntimeWatchdogSec` 已开、dmesg 不再报 `regulatory.db` 
 
 不想用 CI 也可本地复刻（需 root + loop mount，见 `README.md` / `CLAUDE.md`）：
 ```bash
-bash scripts/00-download-deps.sh 7.1 GengWei1997/kernel-deb
+bash scripts/00-download-deps.sh 7.1 fusion-hxf/kernel-deb
 sudo BOOTSTRAP_TOOL=mmdebstrap UBUNTU_VERSION=resolute ./build.sh ubuntu-server 7.1
 ```

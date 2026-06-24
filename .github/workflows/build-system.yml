@@ -44,7 +44,7 @@ on:
       kernel_repository:
         description: '内核包仓库'
         required: false
-        default: 'GengWei1997/kernel-deb'
+        default: 'fusion-hxf/kernel-deb'
         type: string
   # 仅手动触发：已移除 push / pull_request 自动触发，避免每次改脚本就跑 ARM 构建。
   # （generate-matrix 仍保留 inputs 为空时的默认回退，作为防御。）
@@ -185,7 +185,7 @@ jobs:
       DESKTOP_ENV: ${{ matrix.desktop_env }}
       DEBIAN_VERSION: ${{ matrix.debian_version }}
       UBUNTU_VERSION: ${{ matrix.ubuntu_version }}
-      KERNEL_REPO: ${{ github.event.inputs.kernel_repository || 'GengWei1997/kernel-deb' }}
+      KERNEL_REPO: ${{ github.event.inputs.kernel_repository || 'fusion-hxf/kernel-deb' }}
 
     steps:
       - name: 检出代码
@@ -244,7 +244,7 @@ jobs:
           PID3=$!
 
           curl -sL -o xiaomi-k20pro-boot.img \
-            "https://github.com/GengWei1997/kernel-deb/releases/download/v1.0.0/xiaomi-k20pro-boot.img" &
+            "https://github.com/fusion-hxf/kernel-deb/releases/download/v1.0.0/xiaomi-k20pro-boot.img" &
           PID4=$!
 
           if [[ "${{ env.SYSTEM_TYPE }}" == *"phosh"* || "${{ env.SYSTEM_TYPE }}" == *"gnome"* ]]; then

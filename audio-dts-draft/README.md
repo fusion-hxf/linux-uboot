@@ -8,7 +8,7 @@
 - `sm8150-xiaomi-raphael-audio.dtsi` — 音频节点草稿(前端/后端 DAI、声卡 machine、
   WCD9340 codec、TFA9872 功放、pinctrl 占位)。
 
-## 如何应用(在 GengWei1997/linux raphael-7.1 源码树里)
+## 如何应用(在 fusion-hxf/linux raphael-7.1 源码树里)
 
 1. 把草稿放到 `arch/arm64/boot/dts/qcom/sm8150-xiaomi-raphael-audio.dtsi`。
 2. 在 `arch/arm64/boot/dts/qcom/sm8150-xiaomi-raphael.dts` 顶部头文件区加：
