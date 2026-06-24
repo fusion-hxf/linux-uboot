@@ -157,6 +157,60 @@ dtc -I dtb -O dts /tmp/dtbo.img > /tmp/dtbo.dts   # 或 python3 extract-dtb
 - [ ] UCM 已就绪，声卡起来后直接验证播放/录音通路
 - [ ] 成功后考虑上游 sm8150-mainline（这是整代 SoC 的缺口，有上游价值）
 
+## 8. DTB 上车路径 —— 把音频 DTB 打进 U-Boot（关键！）
+
+**为什么必须做**：U-Boot bootcmd = `bootefi bootmgr`，内核（EFI stub `linux.efi`）拿到的设备树是
+**U-Boot 的 control FDT**，而该 FDT 是**打包时 `cat` 追加到 u-boot 镜像后面**的那份 dtb
+（`doc/board/qualcomm/board.rst`：DTB appended to U-Boot image, retrieved during init）。
+boot 同步钩子只同步 `linux.efi`/`initramfs`，**不碰 dtb**；`/boot/dtbs/qcom/*.dtb` 也不被加载。
+→ **改了音频 DTB，光 `dpkg -i` 内核 + 重启不生效，必须重打 u-boot.img 注入新 dtb。**
+
+**U-Boot 源码零改动**（`dts/upstream` 里无 raphael，必须用内核编出的 dtb）。
+
+### 操作步骤
+```bash
+# 0) 取带音频的 dtb（内核编译产物，三选一）
+#    a) 内核树: linux/arch/arm64/boot/dts/qcom/sm8150-xiaomi-raphael.dtb
+#    b) 从 deb 抽: dpkg-deb -x linux-image-xiaomi-raphael.deb t && find t -name sm8150-xiaomi-raphael.dtb
+NEWDTB=<上面的 dtb 路径>
+
+# 1) 编 u-boot（手机配置，无需改源码）
+cd u-boot
+make CROSS_COMPILE=aarch64-linux-gnu- O=.output qcom_defconfig qcom-phone.config
+make CROSS_COMPILE=aarch64-linux-gnu- O=.output -j$(nproc)   # 产物 .output/u-boot-nodtb.bin
+
+# 2) gzip + 追加 dtb（"与内核配合"的关键一步）
+gzip -kf .output/u-boot-nodtb.bin
+cat .output/u-boot-nodtb.bin.gz "$NEWDTB" > .output/u-boot-nodtb.bin.gz-dtb
+
+# 3) 打包 Android boot image（phone 无 FIT 形式）
+mkbootimg --kernel .output/u-boot-nodtb.bin.gz-dtb \
+  --output u-boot.img --pagesize 4096 --base 0x80000000
+
+# 4) 刷写
+fastboot flash boot u-boot.img
+fastboot erase dtbo        # 避免 dtbo 覆盖与我们的 DTB 冲突（本机已空，照做无害）
+```
+
+⚠️ mkbootimg 的 `--pagesize/--base/--header_version/--*_offset` 要与设备原 u-boot.img 一致，先核对：
+`unpack_bootimg --boot_img /tmp/boot.img | grep -iE 'pagesize|base|offset|header_version'`
+（内核 cmdline `root=UUID=…` 走 EFI 启动项，不在 boot.img，mkbootimg 不用管 cmdline。）
+
+### 验证（刷完重启）
+```bash
+cat /proc/device-tree/sound/compatible    # 出现 qcom,sm8150-sndcard = 新 DTB 生效
+dmesg | grep -iE 'q6asm-dai|tfa|wcd|asoc'  # q6asm-dai 不再 -22
+cat /proc/asound/cards
+```
+
+### 完整三件套（每次改 DTB 都要）
+1. 内核 deb（带音频 DTS + WCD934x 驱动）—— kernel-deb CI 编；
+2. u-boot.img（追加新 dtb）—— 上面步骤重打；
+3. 设备：`dpkg -i 新内核` + `fastboot flash boot 新u-boot.img` + `erase dtbo` → 重启。
+
+> 可选优化（以后省事）：改 `u-boot/board/qualcomm/qcom-phone.env` 的 bootcmd 让 U-Boot 从 `/boot`
+> 载入 dtb 再 bootefi（需重编一次 u-boot），此后改 dtb 只需 `dpkg -i`+重启，不必重打 u-boot。
+
 ## 关键链接
 
 - 内核源：https://github.com/fusion-hxf/linux （分支 raphael-7.1）

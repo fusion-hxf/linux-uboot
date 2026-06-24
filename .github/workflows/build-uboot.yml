@@ -1,0 +1,132 @@
+name: 构建 U-Boot (含音频 DTB)
+
+# 手动触发：交叉编译 U-Boot，从内核 deb 抽取带音频的 DTB 追加进 boot image，发布到 Release
+on:
+  workflow_dispatch:
+    inputs:
+      uboot_repo:
+        description: 'U-Boot 源码仓库'
+        required: false
+        default: 'https://github.com/fusion-hxf/u-boot.git'
+        type: string
+      uboot_ref:
+        description: 'U-Boot 分支/标签 (留空=默认分支)'
+        required: false
+        default: ''
+        type: string
+      kernel_deb_url:
+        description: '内核 deb 下载地址 (用于抽取 sm8150-xiaomi-raphael.dtb)'
+        required: false
+        default: 'https://github.com/fusion-hxf/kernel-deb/releases/download/kernel-v7.1/linux-image-xiaomi-raphael.deb'
+        type: string
+      kernel_version:
+        description: '版本号 (用于 Release 命名)'
+        required: false
+        default: '7.1'
+        type: string
+      pagesize:
+        description: 'mkbootimg --pagesize (需与设备原 u-boot.img 一致)'
+        required: false
+        default: '4096'
+        type: string
+      base_addr:
+        description: 'mkbootimg --base (默认 0x0 = 复刻 GengWei v1.0.0 镜像；勿随意改)'
+        required: false
+        default: '0x0'
+        type: string
+
+jobs:
+  build-uboot:
+    runs-on: ubuntu-24.04          # x86 交叉编译，比 arm runner 快
+    permissions:
+      contents: write              # 允许创建 Release
+    steps:
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu bc bison flex libssl-dev device-tree-compiler \
+            python3 python3-dev python3-setuptools swig uuid-dev gzip wget dpkg
+          # mkbootimg（AOSP 工具的 PyPI 打包，提供 mkbootimg/unpack_bootimg 命令）
+          pip3 install --break-system-packages mkbootimg || pip3 install mkbootimg
+          command -v mkbootimg || { echo "::error::mkbootimg 安装失败"; exit 1; }
+
+      - name: 克隆 U-Boot 源码
+        run: |
+          if [ -n "${{ inputs.uboot_ref }}" ]; then
+            git clone --depth 1 --branch "${{ inputs.uboot_ref }}" "${{ inputs.uboot_repo }}" u-boot
+          else
+            git clone --depth 1 "${{ inputs.uboot_repo }}" u-boot
+          fi
+          ( cd u-boot && git log --oneline -1 )
+
+      - name: 下载内核 deb 并抽取 DTB
+        run: |
+          wget -O linux-image.deb "${{ inputs.kernel_deb_url }}"
+          dpkg-deb -x linux-image.deb kdeb
+          DTB=$(find kdeb -name 'sm8150-xiaomi-raphael.dtb' | head -1)
+          if [ -z "$DTB" ]; then
+            echo "::error::deb 中未找到 sm8150-xiaomi-raphael.dtb"; find kdeb -name '*.dtb'; exit 1
+          fi
+          cp "$DTB" raphael.dtb
+          echo "DTB = $DTB ($(stat -c%s raphael.dtb) bytes)"
+
+      - name: 编译 U-Boot (qcom 手机配置)
+        run: |
+          cd u-boot
+          make CROSS_COMPILE=aarch64-linux-gnu- O=.output qcom_defconfig qcom-phone.config
+          make CROSS_COMPILE=aarch64-linux-gnu- O=.output -j"$(nproc)"
+          ls -la .output/u-boot-nodtb.bin
+
+      - name: 追加 DTB 并打包 boot image
+        run: |
+          cd u-boot
+          gzip -kf .output/u-boot-nodtb.bin
+          cat .output/u-boot-nodtb.bin.gz ../raphael.dtb > .output/u-boot-nodtb.bin.gz-dtb
+          # 参数精确复刻设备现用的 GengWei v1.0.0 u-boot.img（实测 header_version=0,
+          # base=0x0, kernel@0x8000, ramdisk@0x1000000, second@0xf00000, tags@0x100, 无 ramdisk/cmdline）
+          mkbootimg \
+            --kernel .output/u-boot-nodtb.bin.gz-dtb \
+            --output ../u-boot.img \
+            --pagesize "${{ inputs.pagesize }}" \
+            --base "${{ inputs.base_addr }}" \
+            --kernel_offset 0x00008000 \
+            --ramdisk_offset 0x01000000 \
+            --second_offset 0x00f00000 \
+            --tags_offset 0x00000100 \
+            --header_version 0
+          ls -la ../u-boot.img
+
+      - name: 获取构建时间
+        id: ts
+        run: echo "timestamp=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_OUTPUT"
+
+      - name: 发布到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: uboot-v${{ inputs.kernel_version }}
+          name: "xiaomi raphael U-Boot (含音频 DTB) v${{ inputs.kernel_version }}"
+          body: |
+            U-Boot 镜像，已把带音频的 sm8150-xiaomi-raphael DTB 追加进 boot image。
+            - U-Boot 源: ${{ inputs.uboot_repo }} @ ${{ inputs.uboot_ref || '默认分支' }}
+            - DTB 来源: ${{ inputs.kernel_deb_url }}
+            - 构建时间: ${{ steps.ts.outputs.timestamp }}
+
+            刷写：
+            ```
+            fastboot flash boot u-boot.img
+            fastboot erase dtbo
+            ```
+            打包参数已按 GengWei v1.0.0 现用镜像实测复刻
+            (header_version=0, base=0x0, pagesize=4096, kernel@0x8000)。
+          draft: false
+          prerelease: false
+          files: u-boot.img
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传制品
+        uses: actions/upload-artifact@v4
+        with:
+          name: u-boot-raphael-v${{ inputs.kernel_version }}
+          path: u-boot.img
