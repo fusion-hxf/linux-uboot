@@ -148,10 +148,25 @@ dtc -I dtb -O dts /tmp/dtbo.img > /tmp/dtbo.dts   # 或 python3 extract-dtb
 - [x] 起草音频 DTS → `audio-dts-draft/sm8150-xiaomi-raphael-audio.dtsi`（以 db845c 为骨架 + §7b 接线）
 - [x] 在内核源树 `linux/` 应用草稿（拷入 dtsi + raphael.dts 加 q6asm.h 头 + 末尾 include）+ 改 `kernel-deb/raphael.config`（加 MFD_WCD934X/SND_SOC_WCD934X/SOUNDWIRE）
 - [x] cpp 预处理验证通过（include 解析、所有宏→数字、无残留宏名）；i2c1 自带 pinctrl（TFA 可探测）
-- [ ] 编译（用户全工具链）→ 烧录测试
-- [ ] 阶段1a：`q6asm-dai` bind（dais 有子节点 → 消除 `-22`，独立于 codec）
-- [ ] 阶段1b：声卡注册（需 tfa9872 + wcd9340 都探测成功，否则 sndcard 会 EPROBE_DEFER）
-- [ ] 阶段2：收敛 pinctrl/routing TODO，UCM 放音/录音
+- [x] 编译 → 烧录（内核 deb + repack-uboot.py 复用 GengWei 二进制换 dtb）
+- [x] 阶段1a：`q6asm-dai` bind（dais 子节点 → `-22` 消除）✅
+- [x] **阶段1b：声卡注册成功** ✅ `0 [XiaomiRedmiK20P]: sm8150 - Xiaomi-Redmi-K20-Pro`，5×MultiMedia PCM 全在
+
+### 实战踩坑与关键修复（2026-06-24，已全部解决，DTS 在 audio-dts-draft/）
+1. **u-boot 自编引导不了 raphael** → 改用 `repack-uboot.py` 复用 GengWei v1.0.0 的 u-boot 二进制、只换追加的 dtb（boot image v0: base=0x0, page=4096, kernel@0x8000，已逐字节验证）。
+2. **dtc syntax error** → 头注释里嵌套 `/* TODO */` 提前闭合注释块；改成 `"TODO"`。
+3. **ADSP/CDSP 固件 -2** → adsp.mbn/cdsp.mbn 在 rootfs 但 auto-boot 在 initramfs 早期（2.1s）请求失败；modem 晚加载(6.3s)成功。**修：systemd 服务开机后 `echo start` 启动 adsp/cdsp**（`/usr/local/sbin/start-qcom-dsp.sh` + `qcom-dsp-boot.service`，按 name 匹配 remoteproc）。
+4. **`no valid maps for state default`** → `&sound` 挂了空的 `quat_mi2s_active` pinctrl 占位 → 删掉（stage2 用真实 GPIO 再恢复）。
+5. **`Speaker Playback: codec dai not found`** → tfa9872 没 probe，因 i2c1 没起；根因是 **i2c1 的父 GENI QUP 包装器 `qupv3_id_0` 默认 disabled**（raphael.dts 只开了 id_1/id_2）。**修：`&qupv3_id_0 { status="okay" };`** → i2c1 起 → tfa987x probe（chip 0x0c74）→ 声卡注册。
+
+### stage2 进展（DTS 已改，待重编验证）
+- [x] dai-link 对齐 UCM 真实拓扑：耳机 MM2→SLIMBUS_6_RX→wcd9340 AIF4_PB(6)；底麦 MM3←SLIMBUS_1_TX←AIF2_CAP(3)；顶麦 MM4←SLIMBUS_5_TX←AIF1_CAP(1)；耳麦 MM5←SLIMBUS_2_TX←AIF3_CAP(5)；扬声器 MM1→QUATERNARY_MI2S_RX→tfa9872。
+- [x] **数字通路验证**：手动 amixer cset(照 HiFi.conf) + `aplay -Dhw:0,1`/`arecord -Dhw:0,2` 全无报错 → q6→SLIMBus→WCD9340 通路就绪（耳机需插耳机才听得到）。
+- [x] 扬声器 QUAT MI2S pinctrl：`quat_mi2s_active` = gpio137(BCK)/138(WS)/139(DOUT)/140(DIN)，function `qua_mi2s`；`&sound` 恢复 pinctrl-0。
+- [ ] **重编验证扬声器出声**（不用耳机即可听）：路由 `QUAT_MI2S_RX Audio Mixer MultiMedia1`=1 → `aplay -Dhw:0,0`。
+- [ ] WCD9340 路由控件名与 UCM 完全一致（已验证 cset 不报错）。
+- [ ] SoundWire `din-ports (2) mismatch (6)`：raphael 无 WSA，可删 wcd9340 的 `swm: soundwire@c85` 子节点（仅 warning，不阻塞）。
+- [ ] **镜像构建集成**：① `12-create-users.sh` 把 user 加入 `audio` 组；② 把 adsp/cdsp 自启服务并进 `scripts/`（09 或新脚本）；③ u-boot.img 走 `build-uboot.yml`（repack 方案）随内核一起出。
 - [ ] `raphael.config` 加 `CONFIG_MFD_WCD934X=m` + `CONFIG_SND_SOC_WCD934X=m`
 - [ ] 本地编译（照 `kernel-deb/raphael-kernel_build.sh`）→ 验证 `q6asm-dai` bind、声卡注册、`aplay -l` 有卡
 - [ ] UCM 已就绪，声卡起来后直接验证播放/录音通路
