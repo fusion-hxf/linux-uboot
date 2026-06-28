@@ -1,6 +1,6 @@
-[submodule "linux-raphael"]
+[submodule "linux"]
 	path = linux
-	url = git@github.com:fusion-hxf/linux-raphael.git
+	url = git@github.com:fusion-hxf/linux.git
 
 [submodule "kernel-deb"]
 	path = kernel-deb
