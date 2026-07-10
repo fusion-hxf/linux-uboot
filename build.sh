@@ -25,6 +25,7 @@ Environment:
   DEBIAN_VERSION       Debian suite for debian-* images, default: trixie
   UBUNTU_VERSION       Ubuntu suite for ubuntu-* images, default: resolute
   BOOT_IMG             cache boot image path, default: xiaomi-k20pro-boot.img
+  BOOT_IMG_URL         cache boot image download URL (used by 00-download-deps.sh)
   UBOOT_IMG            repacked U-Boot image path, default: u-boot.img
   KERNEL_DEBS_DIR      kernel deb directory, default: xiaomi-raphael-debs_<version>
   REQUIRE_ALSA_DEB     require alsa-xiaomi-raphael.deb, default: 1

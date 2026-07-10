@@ -114,6 +114,8 @@ fastboot flash userdata rootfs.img
 
 CI 会复用 `scripts/00-download-deps.sh` 下载依赖，再执行 `build.sh`。如果 ALSA 配置包缺失，构建会直接失败，避免生成缺少声卡用户态配置的镜像。
 
+cache boot image 默认从 `GengWei1997/kernel-deb` 的 v1.0.0 release 下载；可通过 `BOOT_IMG_URL` 覆盖。
+
 U-Boot 默认下载地址为 GengWei v1.0.0 release。构建会复用其中已验证可启动的 U-Boot 二进制，并用当前 `linux-image` deb 的 `sm8150-xiaomi-raphael.dtb` 重新打包；因此无需编译 U-Boot，也能让启动 DTB 与内核包匹配。可通过 `UBOOT_IMG_URL` 覆盖下载地址，或通过 `UBOOT_IMG` 修改最终镜像输出路径。
 
 ## 设备不变量
