@@ -65,6 +65,7 @@ on:
 env:
   HOSTNAME: xiaomi-raphael
   BOOT_IMG: xiaomi-k20pro-boot.img
+  UBOOT_IMG: u-boot.img
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   SUPPRESS_DEPRECATION_WARNINGS: true
 
@@ -203,11 +204,11 @@ jobs:
           set -Eeuo pipefail
           sudo apt-get update
           sudo apt-get install -y \
-            ca-certificates curl p7zip-full e2fsprogs util-linux \
+            ca-certificates curl unzip python3 dpkg p7zip-full e2fsprogs util-linux \
             android-sdk-libsparse-utils \
             mmdebstrap debootstrap debian-archive-keyring
 
-      - name: 下载内核包和 boot image
+      - name: 下载内核包、cache boot image 和 U-Boot
         run: |
           set -Eeuo pipefail
           chmod +x scripts/*.sh
@@ -218,6 +219,7 @@ jobs:
           set -Eeuo pipefail
           ls -lh "xiaomi-raphael-debs_${KERNEL_VERSION}"
           ls -lh xiaomi-k20pro-boot.img
+          ls -lh u-boot.img
           dpkg-deb -f "xiaomi-raphael-debs_${KERNEL_VERSION}/linux-image-xiaomi-raphael.deb" Package Version Architecture
           dpkg-deb -f "xiaomi-raphael-debs_${KERNEL_VERSION}/firmware-xiaomi-raphael.deb" Package Version Architecture
           dpkg-deb -f "xiaomi-raphael-debs_${KERNEL_VERSION}/alsa-xiaomi-raphael.deb" Package Version Architecture
@@ -247,8 +249,8 @@ jobs:
           echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$FILENAME" >> "$GITHUB_OUTPUT"
 
-          sha256sum rootfs.img xiaomi-k20pro-boot.img > "${FILENAME}.contents.sha256"
-          7z a "${FILENAME}.7z" rootfs.img xiaomi-k20pro-boot.img
+          sha256sum rootfs.img xiaomi-k20pro-boot.img u-boot.img > "${FILENAME}.contents.sha256"
+          7z a "${FILENAME}.7z" rootfs.img xiaomi-k20pro-boot.img u-boot.img
           sha256sum "${FILENAME}.7z" > "${FILENAME}.sha256"
           ls -lh "${FILENAME}.7z" "${FILENAME}.sha256" "${FILENAME}.contents.sha256"
 
@@ -267,7 +269,7 @@ jobs:
         run: |
           sudo rm -rf rootdir 2>/dev/null || true
           sudo rm -rf xiaomi-raphael-debs_* 2>/dev/null || true
-          sudo rm -f rootfs.img xiaomi-k20pro-boot.img 2>/dev/null || true
+          sudo rm -f rootfs.img xiaomi-k20pro-boot.img u-boot.img u-boot.img.zip 2>/dev/null || true
 
   release:
     needs: [generate-matrix, build]

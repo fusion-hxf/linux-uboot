@@ -12,7 +12,7 @@
 | --- | --- |
 | `build.sh` | 本地 rootfs 构建入口 |
 | `config/build-config.sh` | 系统类型、镜像大小、发行版源配置 |
-| `scripts/00-download-deps.sh` | 下载内核 deb、ALSA 配置和 boot image |
+| `scripts/00-download-deps.sh` | 下载内核 deb、ALSA 配置、cache boot image 和 U-Boot |
 | `scripts/01-16` | rootfs 创建、bootstrap、系统配置、内核安装和收尾 |
 | `.github/workflows/build-system.yml` | rootfs 镜像 CI 构建和 release |
 | `.github/workflows/build-uboot.yml` | 实验性的 U-Boot boot image 构建 |
@@ -26,7 +26,7 @@
 
 ## 本地构建
 
-先下载内核包和 boot image：
+先下载内核包、cache boot image 和 U-Boot：
 
 ```bash
 bash scripts/00-download-deps.sh 7.1 fusion-hxf/kernel-deb
@@ -39,6 +39,7 @@ bash scripts/00-download-deps.sh 7.1 fusion-hxf/kernel-deb
 - `firmware-xiaomi-raphael.deb`
 - `alsa-xiaomi-raphael.deb`
 - `xiaomi-k20pro-boot.img`
+- `u-boot.img`（从 GengWei v1.0.0 release 下载后，提取 `linux-image` deb 中的 `sm8150-xiaomi-raphael.dtb` 重新打包）
 
 构建默认 Ubuntu Server 镜像：
 
@@ -54,7 +55,7 @@ sudo BOOTSTRAP_TOOL=mmdebstrap UBUNTU_VERSION=resolute ./build.sh ubuntu-phosh 7
 
 构建脚本需要 root 权限，因为会创建 loop 设备、挂载 rootfs、bind mount `/dev`、`/proc`、`/sys` 并 chroot。
 
-默认产物为 Android sparse 格式的 `rootfs.img`。CI 额外打包 `.7z`、压缩包 `.sha256` 和内容 `.contents.sha256`，并按输入决定是否发布到 GitHub Release。
+默认产物为 Android sparse 格式的 `rootfs.img`。CI 会将其与 `xiaomi-k20pro-boot.img`、`u-boot.img` 一起打包为 `.7z`，并生成压缩包 `.sha256` 和内容 `.contents.sha256`，再按输入决定是否发布到 GitHub Release。
 
 ## 持久化 `/home`
 
@@ -112,6 +113,8 @@ fastboot flash userdata rootfs.img
 - `kernel_release_tag`: 留空，自动使用 `kernel-v<kernel_version>`
 
 CI 会复用 `scripts/00-download-deps.sh` 下载依赖，再执行 `build.sh`。如果 ALSA 配置包缺失，构建会直接失败，避免生成缺少声卡用户态配置的镜像。
+
+U-Boot 默认下载地址为 GengWei v1.0.0 release。构建会复用其中已验证可启动的 U-Boot 二进制，并用当前 `linux-image` deb 的 `sm8150-xiaomi-raphael.dtb` 重新打包；因此无需编译 U-Boot，也能让启动 DTB 与内核包匹配。可通过 `UBOOT_IMG_URL` 覆盖下载地址，或通过 `UBOOT_IMG` 修改最终镜像输出路径。
 
 ## 设备不变量
 

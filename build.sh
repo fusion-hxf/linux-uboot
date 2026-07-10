@@ -24,7 +24,8 @@ Environment:
   BOOTSTRAP_TOOL       mmdebstrap or debootstrap, default: mmdebstrap
   DEBIAN_VERSION       Debian suite for debian-* images, default: trixie
   UBUNTU_VERSION       Ubuntu suite for ubuntu-* images, default: resolute
-  BOOT_IMG             boot image path, default: xiaomi-k20pro-boot.img
+  BOOT_IMG             cache boot image path, default: xiaomi-k20pro-boot.img
+  UBOOT_IMG            repacked U-Boot image path, default: u-boot.img
   KERNEL_DEBS_DIR      kernel deb directory, default: xiaomi-raphael-debs_<version>
   REQUIRE_ALSA_DEB     require alsa-xiaomi-raphael.deb, default: 1
   PERSISTENT_HOME      create persistent /home in userdata tail, default: 1
