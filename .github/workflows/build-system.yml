@@ -12,42 +12,55 @@ on:
           - single
         default: 'parallel'
       system_types:
-        description: '系统类型 (用逗号分隔多个值，如: ubuntu-server,ubuntu-phosh)'
+        description: '系统类型，逗号分隔'
         required: false
         default: 'ubuntu-server'
         type: string
       kernel_versions:
-        description: '内核版本 (默认 7.1)'
+        description: '内核版本，默认 7.1，当前指向音频 bring-up 节点'
         required: false
         default: '7.1'
         type: string
       bootstrap_tools:
-        description: '构建工具 (用逗号分隔多个值，如: mmdebstrap)'
+        description: '构建工具，逗号分隔'
         required: false
         default: 'mmdebstrap'
         type: string
       desktop_environments:
-        description: '桌面环境 (仅适用于Phosh版本)'
+        description: 'Phosh 桌面变体'
         required: false
         default: 'phosh-core'
         type: string
       debian_versions:
-        description: 'Debian 版本 (用逗号分隔多个值，如: trixie,bookworm)'
+        description: 'Debian 版本，逗号分隔'
         required: false
         default: 'trixie'
         type: string
       ubuntu_versions:
-        description: 'Ubuntu 版本 (用逗号分隔多个值，如: noble,resolute)'
+        description: 'Ubuntu 版本，逗号分隔'
         required: false
         default: 'resolute'
         type: string
       kernel_repository:
-        description: '内核包仓库'
+        description: '内核 deb Release 仓库，owner/repo 或 GitHub URL'
         required: false
         default: 'fusion-hxf/kernel-deb'
         type: string
-  # 仅手动触发：已移除 push / pull_request 自动触发，避免每次改脚本就跑 ARM 构建。
-  # （generate-matrix 仍保留 inputs 为空时的默认回退，作为防御。）
+      kernel_release_tag:
+        description: '内核 deb Release tag，留空则使用 kernel-v<kernel_version>'
+        required: false
+        default: ''
+        type: string
+      publish_release:
+        description: '构建完成后发布到 Release'
+        required: true
+        default: true
+        type: boolean
+      release_tag:
+        description: '系统镜像 Release tag'
+        required: false
+        default: 'latest'
+        type: string
 
 env:
   HOSTNAME: xiaomi-raphael
@@ -70,110 +83,103 @@ jobs:
     steps:
       - name: 生成构建矩阵
         id: generate
+        env:
+          INPUT_BUILD_MODE: ${{ inputs.build_mode || 'parallel' }}
+          INPUT_SYSTEM_TYPES: ${{ inputs.system_types || 'ubuntu-server' }}
+          INPUT_KERNEL_VERSIONS: ${{ inputs.kernel_versions || '7.1' }}
+          INPUT_BOOTSTRAP_TOOLS: ${{ inputs.bootstrap_tools || 'mmdebstrap' }}
+          INPUT_DESKTOP_ENVIRONMENTS: ${{ inputs.desktop_environments || 'phosh-core' }}
+          INPUT_DEBIAN_VERSIONS: ${{ inputs.debian_versions || 'trixie' }}
+          INPUT_UBUNTU_VERSIONS: ${{ inputs.ubuntu_versions || 'resolute' }}
         run: |
-          set -e
-          
-          BUILD_MODE="${{ github.event.inputs.build_mode }}"
-          SYS_TYPES="${{ github.event.inputs.system_types }}"
-          KERN_VERS="${{ github.event.inputs.kernel_versions }}"
-          BOOT_TOOLS="${{ github.event.inputs.bootstrap_tools }}"
-          DESKTOP_ENV="${{ github.event.inputs.desktop_environments }}"
-          DEB_VERS="${{ github.event.inputs.debian_versions }}"
-          UBU_VERS="${{ github.event.inputs.ubuntu_versions }}"
+          set -Eeuo pipefail
 
-          # push / pull_request 事件不带 inputs，这里回退到默认值，避免空矩阵报错
-          # 默认只构建：ubuntu-server + 内核 7.1 + Ubuntu 26.04 resolute
-          BUILD_MODE="${BUILD_MODE:-parallel}"
-          SYS_TYPES="${SYS_TYPES:-ubuntu-server}"
-          KERN_VERS="${KERN_VERS:-7.1}"
-          BOOT_TOOLS="${BOOT_TOOLS:-mmdebstrap}"
-          DESKTOP_ENV="${DESKTOP_ENV:-phosh-core}"
-          DEB_VERS="${DEB_VERS:-trixie}"
-          UBU_VERS="${UBU_VERS:-resolute}"
+          compact_csv() {
+            local raw="${1:-$2}"
+            raw="${raw//[[:space:]]/}"
+            printf '%s' "$raw"
+          }
 
-          echo "build_mode=${BUILD_MODE}" >> $GITHUB_OUTPUT
-          
+          BUILD_MODE="$(compact_csv "$INPUT_BUILD_MODE" parallel)"
+          SYS_TYPES="$(compact_csv "$INPUT_SYSTEM_TYPES" ubuntu-server)"
+          KERN_VERS="$(compact_csv "$INPUT_KERNEL_VERSIONS" 7.1)"
+          BOOT_TOOLS="$(compact_csv "$INPUT_BOOTSTRAP_TOOLS" mmdebstrap)"
+          DESKTOP_ENV="$(compact_csv "$INPUT_DESKTOP_ENVIRONMENTS" phosh-core)"
+          DEB_VERS="$(compact_csv "$INPUT_DEBIAN_VERSIONS" trixie)"
+          UBU_VERS="$(compact_csv "$INPUT_UBUNTU_VERSIONS" resolute)"
+
+          echo "build_mode=$BUILD_MODE" >> "$GITHUB_OUTPUT"
+
+          IFS=',' read -ra SYS_ARRAY <<< "$SYS_TYPES"
+          IFS=',' read -ra KERN_ARRAY <<< "$KERN_VERS"
+          IFS=',' read -ra TOOL_ARRAY <<< "$BOOT_TOOLS"
+          IFS=',' read -ra DEB_ARRAY <<< "$DEB_VERS"
+          IFS=',' read -ra UBU_ARRAY <<< "$UBU_VERS"
+
+          ITEMS_FILE="$(mktemp)"
+          add_item() {
+            jq -cn \
+              --arg system_type "$1" \
+              --arg kernel_version "$2" \
+              --arg bootstrap_tool "$3" \
+              --arg debian_version "$4" \
+              --arg ubuntu_version "$5" \
+              --arg desktop_env "$6" \
+              '{system_type:$system_type,kernel_version:$kernel_version,bootstrap_tool:$bootstrap_tool,debian_version:$debian_version,ubuntu_version:$ubuntu_version,desktop_env:$desktop_env}' \
+              >> "$ITEMS_FILE"
+          }
+
           if [ "$BUILD_MODE" = "single" ]; then
-            # 单模式：取每个输入的第一个值
-            SYS_TYPE=$(echo "$SYS_TYPES" | cut -d',' -f1)
-            KERN_VER=$(echo "$KERN_VERS" | cut -d',' -f1)
-            TOOL=$(echo "$BOOT_TOOLS" | cut -d',' -f1)
-            
+            SYS_TYPE="${SYS_ARRAY[0]}"
+            KERN_VER="${KERN_ARRAY[0]}"
+            TOOL="${TOOL_ARRAY[0]}"
             if [[ "$SYS_TYPE" == debian-* ]]; then
-              DEB_VER=$(echo "$DEB_VERS" | cut -d',' -f1)
+              DEB_VER="${DEB_ARRAY[0]}"
               UBU_VER=""
               OS_VER="$DEB_VER"
             else
               DEB_VER=""
-              UBU_VER=$(echo "$UBU_VERS" | cut -d',' -f1)
+              UBU_VER="${UBU_ARRAY[0]}"
               OS_VER="$UBU_VER"
             fi
-            
-            # 输出单个构建的信息供 release job 使用
-            echo "single_system_type=${SYS_TYPE}" >> $GITHUB_OUTPUT
-            echo "single_kernel_version=${KERN_VER}" >> $GITHUB_OUTPUT
-            echo "single_os_version=${OS_VER}" >> $GITHUB_OUTPUT
-            
-            MATRIX="[{"system_type":"$SYS_TYPE","kernel_version":"$KERN_VER","bootstrap_tool":"$TOOL","debian_version":"$DEB_VER","ubuntu_version":"$UBU_VER","desktop_env":"$DESKTOP_ENV"}]"
+            add_item "$SYS_TYPE" "$KERN_VER" "$TOOL" "$DEB_VER" "$UBU_VER" "$DESKTOP_ENV"
+            echo "single_system_type=$SYS_TYPE" >> "$GITHUB_OUTPUT"
+            echo "single_kernel_version=$KERN_VER" >> "$GITHUB_OUTPUT"
+            echo "single_os_version=$OS_VER" >> "$GITHUB_OUTPUT"
           else
-            # 并行模式：使用纯 bash 生成 JSON
-            MATRIX="["
-            FIRST_ITEM=true
-            
-            # 分割字符串为数组
-            IFS=',' read -ra SYS_ARRAY <<< "$SYS_TYPES"
-            IFS=',' read -ra KERN_ARRAY <<< "$KERN_VERS"
-            IFS=',' read -ra TOOL_ARRAY <<< "$BOOT_TOOLS"
-            IFS=',' read -ra DEB_ARRAY <<< "$DEB_VERS"
-            IFS=',' read -ra UBU_ARRAY <<< "$UBU_VERS"
-            
-            # 生成 Debian 组合
             for sys in "${SYS_ARRAY[@]}"; do
               if [[ "$sys" == debian-* ]]; then
                 for kern in "${KERN_ARRAY[@]}"; do
                   for tool in "${TOOL_ARRAY[@]}"; do
                     for deb_ver in "${DEB_ARRAY[@]}"; do
-                      if [ "$FIRST_ITEM" = true ]; then
-                        FIRST_ITEM=false
-                      else
-                        MATRIX="${MATRIX},"
-                      fi
-                      MATRIX="${MATRIX}{\"system_type\":\"$sys\",\"kernel_version\":\"$kern\",\"bootstrap_tool\":\"$tool\",\"debian_version\":\"$deb_ver\",\"ubuntu_version\":\"\",\"desktop_env\":\"$DESKTOP_ENV\"}"
+                      add_item "$sys" "$kern" "$tool" "$deb_ver" "" "$DESKTOP_ENV"
                     done
                   done
                 done
-              fi
-            done
-            
-            # 生成 Ubuntu 组合
-            for sys in "${SYS_ARRAY[@]}"; do
-              if [[ "$sys" == ubuntu-* ]]; then
+              elif [[ "$sys" == ubuntu-* ]]; then
                 for kern in "${KERN_ARRAY[@]}"; do
                   for tool in "${TOOL_ARRAY[@]}"; do
                     for ubu_ver in "${UBU_ARRAY[@]}"; do
-                      if [ "$FIRST_ITEM" = true ]; then
-                        FIRST_ITEM=false
-                      else
-                        MATRIX="${MATRIX},"
-                      fi
-                      MATRIX="${MATRIX}{\"system_type\":\"$sys\",\"kernel_version\":\"$kern\",\"bootstrap_tool\":\"$tool\",\"debian_version\":\"\",\"ubuntu_version\":\"$ubu_ver\",\"desktop_env\":\"$DESKTOP_ENV\"}"
+                      add_item "$sys" "$kern" "$tool" "" "$ubu_ver" "$DESKTOP_ENV"
                     done
                   done
                 done
+              else
+                echo "::error::不支持的系统类型: $sys"
+                exit 1
               fi
             done
-            
-            MATRIX="${MATRIX}]"
           fi
-          
+
+          [ -s "$ITEMS_FILE" ] || { echo "::error::构建矩阵为空"; exit 1; }
+          MATRIX="$(jq -cs '.' "$ITEMS_FILE")"
           echo "Generated matrix: $MATRIX"
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
   build:
     needs: generate-matrix
     name: ${{ format('构建 {0}-{1}', matrix.system_type, matrix.kernel_version) }}
     runs-on: ubuntu-24.04-arm
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -185,7 +191,8 @@ jobs:
       DESKTOP_ENV: ${{ matrix.desktop_env }}
       DEBIAN_VERSION: ${{ matrix.debian_version }}
       UBUNTU_VERSION: ${{ matrix.ubuntu_version }}
-      KERNEL_REPO: ${{ github.event.inputs.kernel_repository || 'fusion-hxf/kernel-deb' }}
+      KERNEL_REPO: ${{ inputs.kernel_repository || 'fusion-hxf/kernel-deb' }}
+      KERNEL_RELEASE_TAG: ${{ inputs.kernel_release_tag || format('kernel-v{0}', matrix.kernel_version) }}
 
     steps:
       - name: 检出代码
@@ -193,120 +200,57 @@ jobs:
 
       - name: 安装构建工具
         run: |
-          echo "[$(date +'%Y-%m-%d %H:%M:%S')] 检查并安装构建工具: ${{ env.BOOTSTRAP_TOOL }}"
-          
-          if [ "${{ env.BOOTSTRAP_TOOL }}" = "mmdebstrap" ]; then
-            if ! command -v mmdebstrap &> /dev/null; then
-              echo "[$(date +'%Y-%m-%d %H:%M:%S')]   安装 mmdebstrap 和依赖..."
-              sudo apt-get update
-              sudo apt-get install -y mmdebstrap debian-archive-keyring
-              echo "[$(date +'%Y-%m-%d %H:%M:%S')]   mmdebstrap 安装完成"
-            else
-              echo "[$(date +'%Y-%m-%d %H:%M:%S')]   mmdebstrap 已安装，跳过"
-            fi
-          else
-            if ! command -v debootstrap &> /dev/null; then
-              echo "[$(date +'%Y-%m-%d %H:%M:%S')]   安装 debootstrap..."
-              sudo apt-get update
-              sudo apt-get install -y debootstrap
-              echo "[$(date +'%Y-%m-%d %H:%M:%S')]   debootstrap 安装完成"
-            else
-              echo "[$(date +'%Y-%m-%d %H:%M:%S')]   debootstrap 已安装，跳过"
-            fi
-          fi
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            ca-certificates curl p7zip-full e2fsprogs util-linux \
+            android-sdk-libsparse-utils \
+            mmdebstrap debootstrap debian-archive-keyring
 
-          # img2simg：把 raw 镜像转成 fastboot 可稳定刷写的 sparse 镜像（见 16-finalize.sh）
-          if ! command -v img2simg &> /dev/null; then
-            echo "[$(date +'%Y-%m-%d %H:%M:%S')]   安装 android-sdk-libsparse-utils (img2simg)..."
-            sudo apt-get update
-            sudo apt-get install -y android-sdk-libsparse-utils
-            echo "[$(date +'%Y-%m-%d %H:%M:%S')]   img2simg 安装完成"
-          else
-            echo "[$(date +'%Y-%m-%d %H:%M:%S')]   img2simg 已安装，跳过"
-          fi
-
-      - name: 下载内核包和boot.img (并行)
+      - name: 下载内核包和 boot image
         run: |
-          mkdir -p xiaomi-raphael-debs_${{ env.KERNEL_VERSION }}
+          set -Eeuo pipefail
+          chmod +x scripts/*.sh
+          bash scripts/00-download-deps.sh "$KERNEL_VERSION" "$KERNEL_REPO"
 
-          echo "正在下载内核包和boot.img (版本: ${{ env.KERNEL_VERSION }})..."
-
-          curl -sL -o xiaomi-raphael-debs_${{ env.KERNEL_VERSION }}/linux-image-xiaomi-raphael.deb \
-            "https://github.com/${{ env.KERNEL_REPO }}/releases/download/kernel-v${{ env.KERNEL_VERSION }}/linux-image-xiaomi-raphael.deb" &
-          PID1=$!
-
-          curl -sL -o xiaomi-raphael-debs_${{ env.KERNEL_VERSION }}/linux-headers-xiaomi-raphael.deb \
-            "https://github.com/${{ env.KERNEL_REPO }}/releases/download/kernel-v${{ env.KERNEL_VERSION }}/linux-headers-xiaomi-raphael.deb" &
-          PID2=$!
-
-          curl -sL -o xiaomi-raphael-debs_${{ env.KERNEL_VERSION }}/firmware-xiaomi-raphael.deb \
-            "https://github.com/${{ env.KERNEL_REPO }}/releases/download/kernel-v${{ env.KERNEL_VERSION }}/firmware-xiaomi-raphael.deb" &
-          PID3=$!
-
-          curl -sL -o xiaomi-k20pro-boot.img \
-            "https://github.com/fusion-hxf/kernel-deb/releases/download/v1.0.0/xiaomi-k20pro-boot.img" &
-          PID4=$!
-
-          if [[ "${{ env.SYSTEM_TYPE }}" == *"phosh"* || "${{ env.SYSTEM_TYPE }}" == *"gnome"* ]]; then
-            curl -sL -o alsa-xiaomi-raphael.deb \
-              "https://github.com/${{ env.KERNEL_REPO }}/releases/download/kernel-v${{ env.KERNEL_VERSION }}/alsa-xiaomi-raphael.deb" &
-            PID5=$!
-          fi
-
-          wait $PID1 $PID2 $PID3 $PID4
-          [ -n "$PID5" ] && wait $PID5 || true
-
-          echo "所有文件下载完成"
-
-      - name: 检查必要文件
+      - name: 检查构建输入
         run: |
-          echo "检查构建所需文件..."
+          set -Eeuo pipefail
+          ls -lh "xiaomi-raphael-debs_${KERNEL_VERSION}"
+          ls -lh xiaomi-k20pro-boot.img
+          dpkg-deb -f "xiaomi-raphael-debs_${KERNEL_VERSION}/linux-image-xiaomi-raphael.deb" Package Version Architecture
+          dpkg-deb -f "xiaomi-raphael-debs_${KERNEL_VERSION}/firmware-xiaomi-raphael.deb" Package Version Architecture
+          dpkg-deb -f "xiaomi-raphael-debs_${KERNEL_VERSION}/alsa-xiaomi-raphael.deb" Package Version Architecture
 
-          if [ ! -f "xiaomi-k20pro-boot.img" ]; then
-            echo "错误: xiaomi-k20pro-boot.img 不存在"
-            exit 1
-          fi
-
-          if [ ! -f "xiaomi-raphael-debs_${{ env.KERNEL_VERSION }}/linux-image-xiaomi-raphael.deb" ]; then
-            echo "错误: linux-image-xiaomi-raphael.deb 不存在"
-            exit 1
-          fi
-
-          echo "所有必要文件存在"
-
-      - name: 执行构建
+      - name: 执行 rootfs 构建
         run: |
-          set -e
+          set -Eeuo pipefail
+          chmod +x build.sh scripts/*.sh
+          sudo \
+            BOOTSTRAP_TOOL="$BOOTSTRAP_TOOL" \
+            DEBIAN_VERSION="$DEBIAN_VERSION" \
+            UBUNTU_VERSION="$UBUNTU_VERSION" \
+            KERNEL_RELEASE_TAG="$KERNEL_RELEASE_TAG" \
+            REQUIRE_ALSA_DEB=1 \
+            ./build.sh "$SYSTEM_TYPE" "$KERNEL_VERSION" "$DESKTOP_ENV"
 
-          chmod +x build.sh
-
-          sudo BOOTSTRAP_TOOL="${{ env.BOOTSTRAP_TOOL }}" DEBIAN_VERSION="${{ env.DEBIAN_VERSION }}" UBUNTU_VERSION="${{ env.UBUNTU_VERSION }}" ./build.sh "${{ env.SYSTEM_TYPE }}" "${{ env.KERNEL_VERSION }}" "${{ env.DESKTOP_ENV }}" "${{ env.DEBIAN_VERSION || env.UBUNTU_VERSION }}"
-
-      - name: 生成产物文件名和校验和
+      - name: 打包产物
         id: artifacts
         run: |
-          # 构建产物标识名
-          OS_VER="${{ env.DEBIAN_VERSION || env.UBUNTU_VERSION }}"
-          FILENAME="rootfs-${{ env.SYSTEM_TYPE }}-${{ env.KERNEL_VERSION }}-${OS_VER}"
-          [[ "${{ env.SYSTEM_TYPE }}" == *"phosh"* ]] && FILENAME="${FILENAME}-${{ env.DESKTOP_ENV }}"
-          
-          echo "filename=${FILENAME}" >> $GITHUB_OUTPUT
-          echo "artifact_name=${FILENAME}" >> $GITHUB_OUTPUT
-          
-          # 生成校验和文件
-          sha256sum rootfs.img xiaomi-k20pro-boot.img > ${FILENAME}.sha256
-          cat ${FILENAME}.sha256
-          
-          # 记录文件大小
-          ROOTFS_SIZE=$(stat -c%s rootfs.img)
-          echo "rootfs_size=${ROOTFS_SIZE}" >> $GITHUB_OUTPUT
+          set -Eeuo pipefail
+          OS_VER="${DEBIAN_VERSION:-$UBUNTU_VERSION}"
+          FILENAME="rootfs_${SYSTEM_TYPE}_${KERNEL_VERSION}_${OS_VER}"
+          if [[ "$SYSTEM_TYPE" == *"phosh"* ]]; then
+            FILENAME="${FILENAME}_${DESKTOP_ENV}"
+          fi
 
-      - name: 压缩镜像
-        run: |
-          FILENAME="${{ steps.artifacts.outputs.filename }}"
-          echo "压缩为 ${FILENAME}.7z ..."
+          echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$FILENAME" >> "$GITHUB_OUTPUT"
+
+          sha256sum rootfs.img xiaomi-k20pro-boot.img > "${FILENAME}.contents.sha256"
           7z a "${FILENAME}.7z" rootfs.img xiaomi-k20pro-boot.img
-          ls -lh "${FILENAME}.7z"
+          sha256sum "${FILENAME}.7z" > "${FILENAME}.sha256"
+          ls -lh "${FILENAME}.7z" "${FILENAME}.sha256" "${FILENAME}.contents.sha256"
 
       - name: 上传产物到 Artifacts
         uses: actions/upload-artifact@v4
@@ -315,19 +259,19 @@ jobs:
           path: |
             ${{ steps.artifacts.outputs.filename }}.7z
             ${{ steps.artifacts.outputs.filename }}.sha256
+            ${{ steps.artifacts.outputs.filename }}.contents.sha256
           retention-days: 7
 
       - name: 清理临时文件
         if: always()
         run: |
-          sudo rm -f alsa-xiaomi-raphael.deb 2>/dev/null || true
           sudo rm -rf rootdir 2>/dev/null || true
-          rm -rf xiaomi-raphael-debs_* 2>/dev/null || true
-          rm -f rootfs.img xiaomi-k20pro-boot.img 2>/dev/null || true
+          sudo rm -rf xiaomi-raphael-debs_* 2>/dev/null || true
+          sudo rm -f rootfs.img xiaomi-k20pro-boot.img 2>/dev/null || true
 
   release:
     needs: [generate-matrix, build]
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_release
     name: 发布统一 Release
     runs-on: ubuntu-latest
     steps:
@@ -335,157 +279,69 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: rootfs-*
+          pattern: rootfs_*
           merge-multiple: false
 
-      - name: 准备 Release 信息
-        id: release-info
+      - name: 生成 Release 描述和文件列表
         run: |
-          TIMESTAMP=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')
-          
-          # 统一使用 latest 标签
-          TAG="latest"
-          RELEASE_TITLE="小米 Raphael 镜像构建"
-          
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "name=${RELEASE_TITLE}" >> $GITHUB_OUTPUT
-          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
-
-      - name: 生成 Release 描述和分类文件
-        id: classify
-        run: |
-          TIMESTAMP="${{ steps.release-info.outputs.timestamp }}"
-          ARTIFACTS_DIR="artifacts"
+          set -Eeuo pipefail
+          TIMESTAMP="$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
           RELEASE_DIR="release-files"
-          
-          # 创建统一发布目录
-          mkdir -p "${RELEASE_DIR}"
-          
-          # 初始化数组
-          LARGE_FILES=""
-          FILE_LIST=""
-          
-          # GitHub Release 单个文件大小限制：2GB = 2147483648 字节
           SIZE_LIMIT=2147483648
-          
-          # 遍历所有产物
-          for artifact_dir in ${ARTIFACTS_DIR}/rootfs-*/; do
-            [ -d "$artifact_dir" ] || continue
-            
-            for file in "${artifact_dir}"*.7z; do
-              [ -f "$file" ] || continue
-              
-              filename=$(basename "$file")
-              filesize=$(stat -c%s "$file")
-              
-              # 解析文件名信息
-              # 格式: rootfs-{system_type}-{kernel_version}-{os_version}[-{desktop_env}].7z
-              IFS='-' read -ra PARTS <<< "${filename%.7z}"
-              SYSTEM_TYPE="${PARTS[1]}"
-              KERNEL_VER="${PARTS[2]}"
-              OS_VER="${PARTS[3]}"
-              
-              # 获取校验和
-              shafile="${file%.7z}.sha256"
-              if [ -f "$shafile" ]; then
-                SHA256=$(awk 'NR==1 {print $1}' "$shafile")
-              else
-                SHA256=$(sha256sum "$file" | awk '{print $1}')
-              fi
-              
-              # 构建文件信息行
-              FILE_INFO="| ${filename} | ${SYSTEM_TYPE} | ${KERNEL_VER} | ${OS_VER} |"
-              
-              if [ "$filesize" -gt "$SIZE_LIMIT" ]; then
-                # 大文件：不加入 Release，保留在 Artifacts
-                LARGE_FILES="${LARGE_FILES}
-          - ${filename} (${filesize} bytes)"
-                FILE_LIST="${FILE_LIST}
-          - ⚠️ **${filename}** (文件过大，请从 Artifacts 下载)"
-              else
-                # 小文件：加入 Release，创建符号链接到统一目录
-                ln -sf "$(realpath "$file")" "${RELEASE_DIR}/${filename}"
-                FILE_LIST="${FILE_LIST}
-          - ✅ **${filename}**"
-              fi
-              
-              # 收集校验和信息
-              SHA256_LIST="${SHA256_LIST}
-          ${filename}: ${SHA256}"
-            done
-          done
-          
-          # 列出要上传的文件
-          echo "要上传到 Release 的文件:"
-          ls -la ${RELEASE_DIR}/
-          
-          {
-            echo "large_files<<EOF"
-            echo "$LARGE_FILES"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-          {
-            echo "file_list<<EOF"
-            echo "$FILE_LIST"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-          {
-            echo "sha256_list<<EOF"
-            echo "$SHA256_LIST"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+          mkdir -p "$RELEASE_DIR"
 
-      - name: 创建 Release 描述
-        id: description
-        run: |
-          TIMESTAMP="${{ steps.release-info.outputs.timestamp }}"
-          FILE_LIST="${{ steps.classify.outputs.file_list }}"
-          LARGE_FILES="${{ steps.classify.outputs.large_files }}"
-          SHA256_LIST="${{ steps.classify.outputs.sha256_list }}"
-          
           {
-            echo "body<<EOF"
-            echo "## 小米 Raphael (K20 Pro) 系统镜像集合"
+            echo "## Xiaomi Raphael 系统镜像"
             echo ""
-            echo "> 自动构建版本 - ${TIMESTAMP}"
+            echo "构建时间: $TIMESTAMP"
             echo ""
-            echo "### 📦 镜像列表"
-            echo "| 文件名 | 系统类型 | 内核版本 | 系统版本 |"
-            echo "|--------|----------|----------|----------|"
-            echo "$FILE_LIST"
+            echo "默认账号:"
+            echo "- user / 1234"
+            echo "- root / 1234"
             echo ""
-            echo "### 🔒 SHA256 校验和"
-            echo "\`\`\`"
-            echo "$SHA256_LIST"
-            echo "\`\`\`"
+            echo "USB NCM: 172.16.42.1"
             echo ""
-            if [ -n "$LARGE_FILES" ]; then
-              echo "### ⚠️ 大文件提示"
-              echo "以下文件超过 2GB，未上传到 Release，请从 Artifacts 下载："
-              echo "$LARGE_FILES"
-              echo ""
+            echo "### 产物"
+          } > release-notes.md
+
+          found=0
+          while IFS= read -r -d '' file; do
+            found=1
+            filename="$(basename "$file")"
+            filesize="$(stat -c%s "$file")"
+            sha_file="${file%.7z}.sha256"
+            if [ -f "$sha_file" ]; then
+              sha="$(awk 'NR==1 {print $1}' "$sha_file")"
+            else
+              sha="$(sha256sum "$file" | awk '{print $1}')"
             fi
-            echo "### 🔑 默认凭据"
-            echo "- **用户**: \`user\` / **密码**: \`1234\`"
-            echo "- **用户**: \`root\` / **密码**: \`1234\`"
-            echo ""
-            echo "### 🌐 网络连接 (USB NCM)"
-            echo "- 设备 IP: \`172.16.42.1\`"
-            echo "- SSH 命令: \`ssh user@172.16.42.1\`"
-            echo ""
-            echo "---"
-            echo "*Built with ❤️ by GitHub Actions*"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+
+            if [ "$filesize" -gt "$SIZE_LIMIT" ]; then
+              echo "- $filename: ${filesize} bytes，超过 2GB，仅保留在 Artifacts，sha256=$sha" >> release-notes.md
+            else
+              ln -sf "$(realpath "$file")" "$RELEASE_DIR/$filename"
+              echo "- $filename: ${filesize} bytes，sha256=$sha" >> release-notes.md
+            fi
+          done < <(find artifacts -type f -name '*.7z' -print0 | sort -z)
+
+          [ "$found" -eq 1 ] || { echo "::error::没有找到 rootfs 产物"; exit 1; }
+          echo "" >> release-notes.md
+          echo "### 内核来源" >> release-notes.md
+          echo "- kernel repository: ${{ inputs.kernel_repository || 'fusion-hxf/kernel-deb' }}" >> release-notes.md
+          echo "- kernel release tag: ${{ inputs.kernel_release_tag || 'kernel-v<kernel_version>' }}" >> release-notes.md
+
+          cat release-notes.md
+          ls -la "$RELEASE_DIR"
 
       - name: 发布 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release-info.outputs.tag }}
-          name: ${{ steps.release-info.outputs.name }}
-          body: ${{ steps.description.outputs.body }}
+          tag_name: ${{ inputs.release_tag || 'latest' }}
+          name: "Xiaomi Raphael 系统镜像"
+          body_path: release-notes.md
           draft: false
           prerelease: false
+          fail_on_unmatched_files: false
           files: release-files/*.7z
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,117 +1,217 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
+log() {
+    printf '[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*"
+}
 
-# 解析参数（默认构建：ubuntu-server + 内核 7.1 + Ubuntu 26.04 resolute）
+die() {
+    log "ERROR: $*"
+    exit 1
+}
+
+usage() {
+    cat <<'EOF'
+Usage:
+  sudo ./build.sh [system_type] [kernel_version] [desktop_env] [os_version]
+
+Examples:
+  bash scripts/00-download-deps.sh 7.1 fusion-hxf/kernel-deb
+  sudo BOOTSTRAP_TOOL=mmdebstrap ./build.sh ubuntu-server 7.1
+  sudo BOOTSTRAP_TOOL=mmdebstrap ./build.sh ubuntu-phosh 7.1 phosh-core resolute
+
+Environment:
+  BOOTSTRAP_TOOL       mmdebstrap or debootstrap, default: mmdebstrap
+  DEBIAN_VERSION       Debian suite for debian-* images, default: trixie
+  UBUNTU_VERSION       Ubuntu suite for ubuntu-* images, default: resolute
+  BOOT_IMG             boot image path, default: xiaomi-k20pro-boot.img
+  KERNEL_DEBS_DIR      kernel deb directory, default: xiaomi-raphael-debs_<version>
+  REQUIRE_ALSA_DEB     require alsa-xiaomi-raphael.deb, default: 1
+  PERSISTENT_HOME      create persistent /home in userdata tail, default: 1
+  PERSISTENT_HOME_OFFSET start offset for persistent /home, default: 16G
+EOF
+}
+
+cleanup_mounts_on_failure() {
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then
+        return 0
+    fi
+
+    log "构建失败，尝试卸载已挂载目录"
+    for mount_point in rootdir/sys rootdir/proc rootdir/dev/pts rootdir/dev rootdir/boot rootdir; do
+        if mountpoint -q "$mount_point" 2>/dev/null; then
+            umount "$mount_point" 2>/dev/null || true
+        fi
+    done
+    return "$rc"
+}
+
+export_config_lines() {
+    local lines="$1"
+    local line
+
+    [ -n "$lines" ] || return 1
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        export "$line"
+    done <<< "$lines"
+}
+
+require_file() {
+    [ -f "$1" ] || die "缺少文件: $1"
+}
+
+require_kernel_debs() {
+    local dir="$1"
+    local pkg
+
+    [ -d "$dir" ] || die "缺少内核 deb 目录: $dir"
+    for pkg in linux-image linux-headers firmware; do
+        require_file "$dir/$pkg-xiaomi-raphael.deb"
+    done
+}
+
+size_to_bytes() {
+    local value="$1"
+    local number unit multiplier
+
+    number="${value%[KkMmGgTt]}"
+    unit="${value#$number}"
+    [ "$number" -eq "$number" ] 2>/dev/null || die "无效大小: $value"
+
+    case "$unit" in
+        "" ) multiplier=1 ;;
+        [Kk] ) multiplier=1024 ;;
+        [Mm] ) multiplier=$((1024 * 1024)) ;;
+        [Gg] ) multiplier=$((1024 * 1024 * 1024)) ;;
+        [Tt] ) multiplier=$((1024 * 1024 * 1024 * 1024)) ;;
+        * ) die "无效大小单位: $value" ;;
+    esac
+
+    printf '%s\n' $((number * multiplier))
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    usage
+    exit 0
+fi
+
+if [ "$EUID" -ne 0 ]; then
+    usage
+    die "rootfs 构建需要 root 权限，请使用 sudo 运行 build.sh"
+fi
+
 SYSTEM_TYPE="${1:-ubuntu-server}"
 KERNEL_VERSION="${2:-7.1}"
-DESKTOP_ENV="${3:-phosh-full}"
-
-# 解析发行版版本参数（未显式设置环境变量时给默认值）
-if [[ "$SYSTEM_TYPE" == *"debian-"* ]]; then
-    DEBIAN_VERSION="${DEBIAN_VERSION:-trixie}"
-    export DEBIAN_VERSION
-elif [[ "$SYSTEM_TYPE" == *"ubuntu-"* ]]; then
-    UBUNTU_VERSION="${UBUNTU_VERSION:-resolute}"
-    export UBUNTU_VERSION
-fi
-
-# 解析构建模式参数
-USE_DOCKER="${5:-false}"
-export USE_DOCKER
+DESKTOP_ENV_ARG="${3:-phosh-full}"
+OS_VERSION_ARG="${4:-}"
+USE_DOCKER="${USE_DOCKER:-${5:-false}}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# 加载配置文件
+# shellcheck source=config/build-config.sh
 . "$SCRIPT_DIR/config/build-config.sh"
 
-# 加载系统配置
-TMP_SYSTEM_CONFIG=$(mktemp)
-system_config "$SYSTEM_TYPE" "$DESKTOP_ENV" > "$TMP_SYSTEM_CONFIG"
-while IFS= read -r line; do
-    export "$line"
-done < "$TMP_SYSTEM_CONFIG"
-rm "$TMP_SYSTEM_CONFIG"
+case "$SYSTEM_TYPE" in
+    debian-*)
+        DEBIAN_VERSION="${DEBIAN_VERSION:-${OS_VERSION_ARG:-trixie}}"
+        UBUNTU_VERSION="${UBUNTU_VERSION:-}"
+        ;;
+    ubuntu-*)
+        UBUNTU_VERSION="${UBUNTU_VERSION:-${OS_VERSION_ARG:-resolute}}"
+        DEBIAN_VERSION="${DEBIAN_VERSION:-}"
+        ;;
+    *)
+        usage
+        die "不支持的系统类型: $SYSTEM_TYPE"
+        ;;
+esac
+export SYSTEM_TYPE KERNEL_VERSION USE_DOCKER DEBIAN_VERSION UBUNTU_VERSION
 
-# 加载镜像源配置
-TMP_SOURCES_CONFIG=$(mktemp)
-sources_config "$SYSTEM_TYPE" > "$TMP_SOURCES_CONFIG"
-while IFS= read -r line; do
-    export "$line"
-done < "$TMP_SOURCES_CONFIG"
-rm "$TMP_SOURCES_CONFIG"
+SYSTEM_CONFIG="$(system_config "$SYSTEM_TYPE" "$DESKTOP_ENV_ARG")" || die "无法生成系统配置: $SYSTEM_TYPE"
+export_config_lines "$SYSTEM_CONFIG" || die "系统配置为空: $SYSTEM_TYPE"
 
-# 导出通用变量
+SOURCES_CONFIG="$(sources_config "$SYSTEM_TYPE")" || die "无法生成镜像源配置: $SYSTEM_TYPE"
+export_config_lines "$SOURCES_CONFIG" || die "镜像源配置为空: $SYSTEM_TYPE"
+
 export SCRIPT_DIR
-export KERNEL_VERSION
-export DESKTOP_ENV
-export IMAGE_NAME="rootfs.img"
-export IMAGE_UUID="ee8d3593-59b1-480e-a3b6-4fefb17ee7d8"
-export HOSTNAME="xiaomi-raphael"
-export BOOT_IMG="xiaomi-k20pro-boot.img"
-export KERNEL_DEBS_DIR="xiaomi-raphael-debs_$KERNEL_VERSION"
-
+export IMAGE_NAME="${IMAGE_NAME:-rootfs.img}"
+export IMAGE_UUID="${IMAGE_UUID:-ee8d3593-59b1-480e-a3b6-4fefb17ee7d8}"
+export HOSTNAME="${HOSTNAME:-xiaomi-raphael}"
+export BOOT_IMG="${BOOT_IMG:-xiaomi-k20pro-boot.img}"
+export KERNEL_DEBS_DIR="${KERNEL_DEBS_DIR:-xiaomi-raphael-debs_$KERNEL_VERSION}"
+export BOOTSTRAP_TOOL="${BOOTSTRAP_TOOL:-mmdebstrap}"
+export REQUIRE_ALSA_DEB="${REQUIRE_ALSA_DEB:-1}"
+export PERSISTENT_HOME="${PERSISTENT_HOME:-1}"
+export PERSISTENT_HOME_OFFSET="${PERSISTENT_HOME_OFFSET:-16G}"
+export PERSISTENT_HOME_OFFSET_BYTES="${PERSISTENT_HOME_OFFSET_BYTES:-$(size_to_bytes "$PERSISTENT_HOME_OFFSET")}"
+export PERSISTENT_HOME_MIN_SIZE_BYTES="${PERSISTENT_HOME_MIN_SIZE_BYTES:-$((2 * 1024 * 1024 * 1024))}"
+export PERSISTENT_HOME_LABEL="${PERSISTENT_HOME_LABEL:-raphael-home}"
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 export DEBIAN_FRONTEND="noninteractive"
-export SYSTEM_TYPE
 
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] ========================================== 🎉"
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] 系统镜像构建脚本"
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] ========================================== 🎉"
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] 系统类型:      $SYSTEM_TYPE 🖥️"
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] 内核版本:      $KERNEL_VERSION 🧠"
-if [ -n "$DEBIAN_VERSION" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] Debian 版本:   $DEBIAN_VERSION 🐧"
-elif [ -n "$UBUNTU_VERSION" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] Ubuntu 版本:   $UBUNTU_VERSION 🦁"
-fi
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] 镜像大小:      $IMAGE_SIZE 💾"
-if [ "$IS_DESKTOP" = "true" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] 桌面环境:      $DESKTOP_ENV 🎨"
-fi
-BOOTSTRAP_TOOL="${BOOTSTRAP_TOOL:-mmdebstrap}"
-if [ "$BOOTSTRAP_TOOL" = "debootstrap" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] 构建模式:      debootstrap 🛠️"
-else
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] 构建模式:      mmdebstrap 📦"
-fi
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] ========================================== 🎉"
+trap cleanup_mounts_on_failure EXIT
 
-if [ ! -f "$BOOT_IMG" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] ❌ 错误: $BOOT_IMG 不存在"
-    exit 1
-fi
-
-if [ ! -d "$KERNEL_DEBS_DIR" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] ❌ 错误: $KERNEL_DEBS_DIR 目录不存在"
-    exit 1
+require_file "$BOOT_IMG"
+require_kernel_debs "$KERNEL_DEBS_DIR"
+if [ "$REQUIRE_ALSA_DEB" = "1" ]; then
+    require_file "$KERNEL_DEBS_DIR/alsa-xiaomi-raphael.deb"
 fi
 
 chmod +x "$SCRIPT_DIR/scripts"/*.sh
 
-echo ""
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] ========================================== 🚀 开始构建 =========================================="
-"$SCRIPT_DIR/scripts/01-create-image.sh"
-"$SCRIPT_DIR/scripts/02-bootstrap.sh"
-"$SCRIPT_DIR/scripts/03-mount-dev.sh"
-"$SCRIPT_DIR/scripts/04-config-network.sh"
-"$SCRIPT_DIR/scripts/05-apt-setup.sh"
-"$SCRIPT_DIR/scripts/06-install-all-packages.sh"
-"$SCRIPT_DIR/scripts/07-config-locale.sh"
-"$SCRIPT_DIR/scripts/08-add-screen-commands.sh"
-"$SCRIPT_DIR/scripts/09-install-kernel.sh"
-"$SCRIPT_DIR/scripts/10-config-ncm.sh"
-"$SCRIPT_DIR/scripts/11-config-fstab.sh"
-"$SCRIPT_DIR/scripts/12-create-users.sh"
-"$SCRIPT_DIR/scripts/13-config-power.sh"
-"$SCRIPT_DIR/scripts/14-config-zram.sh"
-"$SCRIPT_DIR/scripts/15-cleanup.sh"
-"$SCRIPT_DIR/scripts/16-finalize.sh"
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] ========================================== 🎉 构建完成 🎉 =========================================="
+log "=========================================="
+log "系统镜像构建脚本"
+log "=========================================="
+log "系统类型:      $SYSTEM_TYPE"
+log "内核版本:      $KERNEL_VERSION"
+if [ -n "$DEBIAN_VERSION" ]; then
+    log "Debian 版本:   $DEBIAN_VERSION"
+elif [ -n "$UBUNTU_VERSION" ]; then
+    log "Ubuntu 版本:   $UBUNTU_VERSION"
+fi
+log "镜像大小:      $IMAGE_SIZE"
+if [ "${IS_DESKTOP:-false}" = "true" ]; then
+    log "桌面环境:      $DESKTOP_ENV"
+fi
+log "bootstrap:     $BOOTSTRAP_TOOL"
+log "boot image:    $BOOT_IMG"
+log "kernel debs:   $KERNEL_DEBS_DIR"
+if [ "$PERSISTENT_HOME" = "1" ]; then
+    log "persistent /home: enabled, offset=$PERSISTENT_HOME_OFFSET ($PERSISTENT_HOME_OFFSET_BYTES bytes)"
+else
+    log "persistent /home: disabled"
+fi
+log "=========================================="
 
-echo ""
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] 📦 产物文件:"
+STEPS=(
+    01-create-image.sh
+    02-bootstrap.sh
+    03-mount-dev.sh
+    04-config-network.sh
+    05-apt-setup.sh
+    06-install-all-packages.sh
+    07-config-locale.sh
+    08-add-screen-commands.sh
+    09-install-kernel.sh
+    10-config-ncm.sh
+    11-config-fstab.sh
+    12-create-users.sh
+    13-config-power.sh
+    14-config-zram.sh
+    15-cleanup.sh
+    16-finalize.sh
+)
+
+log "开始构建"
+for step in "${STEPS[@]}"; do
+    log "运行步骤: $step"
+    "$SCRIPT_DIR/scripts/$step"
+done
+
+log "构建完成"
+log "产物文件:"
 ls -lh rootfs.img 2>/dev/null || true
 ls -lh rootfs.7z 2>/dev/null || true
-echo ""
-echo "[$(date +'%Y-%m-%d %H:%M:%S')] ✅ 构建成功完成!"

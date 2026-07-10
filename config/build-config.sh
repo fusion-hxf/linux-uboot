@@ -47,6 +47,9 @@ system_config() {
       echo "IS_DESKTOP=true"
       echo "DESKTOP_ENV=$2"
       ;;
+    *)
+      return 1
+      ;;
   esac
 }
 
@@ -60,6 +63,8 @@ sources_config() {
     local version="${UBUNTU_VERSION:-resolute}"
     echo "UBUNTU_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/"
     echo "UBUNTU_SECURITY_MIRROR=http://ports.ubuntu.com/ubuntu-ports/"
+  else
+    return 1
   fi
 }
 

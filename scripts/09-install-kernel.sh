@@ -104,7 +104,13 @@ EOS
 done
 
 # 4. 安装内核与固件包
-cp ${KERNEL_DEBS_DIR}/*-xiaomi-raphael.deb rootdir/tmp/
+for pkg in linux-image linux-headers firmware; do
+    if [ ! -f "${KERNEL_DEBS_DIR}/${pkg}-xiaomi-raphael.deb" ]; then
+        echo "[$(date +'%Y-%m-%d %H:%M:%S')] [09] ❌ 错误: 缺少 ${KERNEL_DEBS_DIR}/${pkg}-xiaomi-raphael.deb"
+        exit 1
+    fi
+    cp "${KERNEL_DEBS_DIR}/${pkg}-xiaomi-raphael.deb" rootdir/tmp/
+done
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [09]   └─ 安装 linux-image..."
 chroot rootdir dpkg -i /tmp/linux-image-xiaomi-raphael.deb
@@ -122,7 +128,9 @@ for f in linux-image linux-headers firmware; do
     [ -n "$pkg" ] && chroot rootdir apt-mark hold "$pkg" || true
 done
 
-rm rootdir/tmp/*-xiaomi-raphael.deb
+rm rootdir/tmp/linux-image-xiaomi-raphael.deb
+rm rootdir/tmp/linux-headers-xiaomi-raphael.deb
+rm rootdir/tmp/firmware-xiaomi-raphael.deb
 
 # 5. 重新生成并更新 initramfs，使 GPU 固件和同步钩子生效
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [09]   └─ 更新并生成最终 initramfs..."

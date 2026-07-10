@@ -10,6 +10,8 @@ SYSTEM_TYPE="${SYSTEM_TYPE:-ubuntu-server}"
 DESKTOP_ENV="${DESKTOP_ENV:-}"
 DEBIAN_VERSION="${DEBIAN_VERSION:-trixie}"
 UBUNTU_VERSION="${UBUNTU_VERSION:-resolute}"
+KERNEL_DEBS_DIR="${KERNEL_DEBS_DIR:-xiaomi-raphael-debs_${KERNEL_VERSION:-7.1}}"
+REQUIRE_ALSA_DEB="${REQUIRE_ALSA_DEB:-1}"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] 📦 安装软件包"
 
@@ -19,19 +21,20 @@ echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 更新系统包..."
 chroot rootdir apt-get update
 chroot rootdir apt-get upgrade -y
 
-BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata iproute2 zram-tools"
+BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata iproute2 zram-tools e2fsprogs util-linux"
 
 if [[ "$SYSTEM_TYPE" == *"debian-"* ]]; then 
-    BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata fonts-wqy-microhei dnsmasq nftables iproute2 zram-tools"
+    BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata fonts-wqy-microhei dnsmasq nftables iproute2 zram-tools e2fsprogs util-linux"
 elif [[ "$SYSTEM_TYPE" == *"ubuntu-"* ]]; then
     if [[ "$SYSTEM_TYPE" == *"server"* ]]; then
-        BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata dnsmasq nftables iproute2 zram-tools"
+        BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata dnsmasq nftables iproute2 zram-tools e2fsprogs util-linux"
     else
-        BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata dnsmasq nftables iproute2 zram-tools"
+        BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata dnsmasq nftables iproute2 zram-tools e2fsprogs util-linux"
     fi
 fi
 
 DEVICE_PACKAGES="rmtfs protection-domain-mapper tqftpserv"
+AUDIO_PACKAGES="alsa-utils alsa-ucm-conf alsa-topology-conf pipewire pipewire-pulse wireplumber"
 
 if [[ "$SYSTEM_TYPE" != *"server"* ]]; then
     case "$DESKTOP_ENV" in
@@ -59,10 +62,11 @@ else
     DESKTOP_PACKAGES=""
 fi
 
-ALL_PACKAGES="$BASE_PACKAGES $DEVICE_PACKAGES $DESKTOP_PACKAGES"
+ALL_PACKAGES="$BASE_PACKAGES $DEVICE_PACKAGES $AUDIO_PACKAGES $DESKTOP_PACKAGES"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 基础包: $(echo "$BASE_PACKAGES" | tr ' ' ', ')"
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 设备包: $(echo "$DEVICE_PACKAGES" | tr ' ' ', ')"
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 音频包: $(echo "$AUDIO_PACKAGES" | tr ' ' ', ')"
 if [ -n "$DESKTOP_PACKAGES" ]; then
     echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 桌面包: $(echo "$DESKTOP_PACKAGES" | tr ' ' ', ')"
 fi
@@ -100,11 +104,27 @@ EOF
     fi
 fi
 
-if [ -f "alsa-xiaomi-raphael.deb" ]; then
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装 ALSA 配置"
-    cp alsa-xiaomi-raphael.deb rootdir/tmp/
+ALSA_DEB=""
+for candidate in \
+    "${ALSA_DEB_PATH:-}" \
+    "${KERNEL_DEBS_DIR}/alsa-xiaomi-raphael.deb" \
+    "alsa-xiaomi-raphael.deb"; do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+        ALSA_DEB="$candidate"
+        break
+    fi
+done
+
+if [ -n "$ALSA_DEB" ]; then
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装 ALSA 配置: $ALSA_DEB"
+    cp "$ALSA_DEB" rootdir/tmp/alsa-xiaomi-raphael.deb
     chroot rootdir dpkg -i /tmp/alsa-xiaomi-raphael.deb
     rm rootdir/tmp/alsa-xiaomi-raphael.deb
+elif [ "$REQUIRE_ALSA_DEB" = "1" ]; then
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] ❌ 错误: 缺少 alsa-xiaomi-raphael.deb"
+    exit 1
+else
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 未安装 ALSA 配置 (REQUIRE_ALSA_DEB=0)"
 fi
 
 if [[ "$SYSTEM_TYPE" != *"server"* ]]; then

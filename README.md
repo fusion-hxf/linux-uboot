@@ -1,214 +1,123 @@
-# 小米 Raphael 设备 Linux 系统镜像构建项目
+# Raphael Rootfs Image Builder
 
-本项目为小米 Raphael（Redmi K20 Pro）专属 Linux 镜像构建项目，提供完整的 Debian / Ubuntu 系统镜像构建脚本与 GitHub Actions 自动化工作流，支持多内核、多桌面、服务器版，开箱即用，适配性完善。
+本仓库只保留系统镜像构建与 CI 发布相关内容，用于为 Xiaomi Redmi K20 Pro / Mi 9T Pro（`raphael` / `sm8150`）装配 Debian / Ubuntu rootfs。
 
-## 📌 项目概述
+它不维护内核源码，也不维护 U-Boot 源码。内核、固件、ALSA 配置和 boot image 来自外部 release；本仓库负责下载这些产物、创建 rootfs、写入设备配置，并在 GitHub Actions 中打包发布镜像。
 
-项目集成全套自动化构建工具链，支持内核编译、系统镜像打包，覆盖桌面端与服务器端系统，所有镜像均预装适配设备的专属驱动、固件及常用工具，无需额外配置即可正常使用。
+默认内核版本 `7.1` 当前对应音频 bring-up 节点。已确认无效的视频驱动尝试不进入默认构建链路。
 
-支持构建系统类型：
+## 保留内容
 
-- **Debian 系列**：GNOME 桌面版、Phosh 移动桌面版、Server 无图形服务器版
+| 路径 | 用途 |
+| --- | --- |
+| `build.sh` | 本地 rootfs 构建入口 |
+| `config/build-config.sh` | 系统类型、镜像大小、发行版源配置 |
+| `scripts/00-download-deps.sh` | 下载内核 deb、ALSA 配置和 boot image |
+| `scripts/01-16` | rootfs 创建、bootstrap、系统配置、内核安装和收尾 |
+| `.github/workflows/build-system.yml` | rootfs 镜像 CI 构建和 release |
+| `.github/workflows/build-uboot.yml` | 实验性的 U-Boot boot image 构建 |
+| `repack-uboot.py` | 复用已知可启动 U-Boot 二进制，只替换追加 DTB |
 
-- **Ubuntu 系列**：GNOME 桌面版、Phosh 移动桌面版、Server 无图形服务器版
+历史调研、诊断脚本和报告已迁到聚合仓库根目录：
 
-- **定制内核**：编译适配设备 Linux 内核
+- `docs/build-kernel-2-image/`
+- `docs/reports/`
+- `tools/`
 
-## ✅ 设备适配状态
+## 本地构建
 
-当前设备硬件适配完整，主流功能全部可用：
+先下载内核包和 boot image：
 
-- 网络：2.4G/5G 双频 Wi-Fi、USB NCM 网络
-
-- 外设：蓝牙（文件传输/音频输出）、USB SSH/OTG 功能、触摸屏、手电筒（支持亮度调节）
-
-- 基础硬件：屏幕显示、电池检测、实时时钟、GPU 渲染、FDE 加密
-
-## 📊 版本支持矩阵
-
-### 系统类型对照表
-
-|系统标识|桌面环境|基础发行版|
-|---|---|---|
-|debian-server|无（纯命令行）|Debian|
-|debian-gnome|GNOME|Debian|
-|debian-phosh|Phosh 移动端桌面|Debian|
-|ubuntu-server|无（纯命令行）|Ubuntu|
-|ubuntu-gnome|GNOME|Ubuntu|
-|ubuntu-phosh|Phosh 移动端桌面|Ubuntu|
-
-### 系统与内核版本
-
-- **Debian 版本**：trixie（默认最新）
-
-- **Ubuntu 版本**：resolute（默认最新）
-
-- **内核版本**：默认 7.1（也可选 7.0 / 6.18）
-
-### Phosh 桌面变体
-
-- `phosh-core`：基础 Phosh 环境
-
-- `phosh-full`：完整的 Phosh 环境
-
-- `phosh-phone`：手机优化的 Phosh 环境
-
-## 🚀 快速上手
-
-### 方式一：下载预构建镜像
-
-项目持续自动构建最新镜像，可直接前往 [Releases](https://github.com/fusion-hxf/linux-uboot/releases) 页面下载，无需本地编译。
-
-> **⚠️ 大文件提示**：`ubuntu-gnome-6.18` / `ubuntu-gnome-7.0` 镜像体积超过 2GB，未上传至 Releases，需前往项目 Artifacts 下载。
-> 
-> 
-
-### 方式二：GitHub Actions 自定义构建（推荐）
-
-> 📘 完整分步指南见 [`github-build-guide.md`](github-build-guide.md)（含参数详解、内核 7.1 注意点、常见坑、刷机与复测）。
-
-1. Fork 本仓库至个人 GitHub 账号
-
-2. 进入仓库 **Actions** 页面，选择「构建系统镜像」工作流
-
-3. 点击 **Run workflow**，自定义构建参数：
-        
-
-    - **构建模式**：`parallel`并行构建全部镜像（默认） / `single` 单独构建指定镜像
-
-    - **系统类型**：支持多类型逗号分隔，默认全量构建
-
-    - **内核版本**：默认 `7.1`（也可选 7.0 / 6.18）
-
-    - **构建工具**：`mmdebstrap`（默认） / `debootstrap`
-
-    - **Phosh 变体**：仅 Phosh 桌面镜像生效，默认`phosh-core`
-
-    - **系统版本**：默认 Debian: trixie、Ubuntu: resolute
-
-4. 等待工作流执行完成，镜像自动打包发布至仓库 Releases
-
-## 📦 镜像通用特性
-
-### 全版本通用
-
-- 默认配置**清华软件源**
-
-- 预装简体中文语言包、中国标准时区，开箱汉化
-
-- 支持 USB NCM 网络共享，电脑直连设备 SSH
-
-- 内置 SSH 服务，支持 root / 普通用户远程登录
-
-- 支持**一键内核更新脚本**，可在线升级定制内核
-
-- 默认账号密码：
-       
-
-    - 普通用户：`user` / `1234`
-
-    - 超级用户：`root` / `1234`
-
-- 设备默认 IP：`172.16.42.1`，SSH 连接命令：`ssh user@172.16.42.1`
-
-### 桌面版专属特性
-
-- GNOME / Phosh 双桌面环境可选，适配桌面、移动两种使用场景
-
-- 已知问题：**GNOME 桌面电源键无法息屏**，后续版本持续修复
-
-### 服务器版专属特性
-
-- 内置网络管理器，支持有线、Wi-Fi、USB 多种联网方式
-
-- 开机 15 秒自动熄屏，降低设备功耗
-
-- 自定义快捷命令：`leijun` 关闭屏幕、`jinfan` 点亮屏幕
-
-## ⬆️ 内核更新教程（只做内核调试用，非必要无需更新）
-
-项目提供一键内核升级脚本，建议**root 权限**执行，快速更新设备定制内核：
-
-官方原始链接：
-
-```Plain Text
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/fusion-hxf/kernel-deb/refs/heads/main/Update-kernel.sh)"
+```bash
+bash scripts/00-download-deps.sh 7.1 fusion-hxf/kernel-deb
 ```
 
-国内加速链接：
+该脚本会下载并校验：
 
-```Plain Text
-sudo bash -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/fusion-hxf/kernel-deb/refs/heads/main/ghproxy-Update-kernel.sh)"
+- `linux-image-xiaomi-raphael.deb`
+- `linux-headers-xiaomi-raphael.deb`
+- `firmware-xiaomi-raphael.deb`
+- `alsa-xiaomi-raphael.deb`
+- `xiaomi-k20pro-boot.img`
+
+构建默认 Ubuntu Server 镜像：
+
+```bash
+sudo BOOTSTRAP_TOOL=mmdebstrap UBUNTU_VERSION=resolute ./build.sh ubuntu-server 7.1
 ```
 
-脚本执行完成后，重启设备即可生效新内核。
+构建 Phosh 镜像：
 
-## 🔧 设备安装教程
+```bash
+sudo BOOTSTRAP_TOOL=mmdebstrap UBUNTU_VERSION=resolute ./build.sh ubuntu-phosh 7.1 phosh-core
+```
 
-### 前置准备
+构建脚本需要 root 权限，因为会创建 loop 设备、挂载 rootfs、bind mount `/dev`、`/proc`、`/sys` 并 chroot。
 
-1. 设备已完成 **Bootloader 解锁**
+默认产物为 Android sparse 格式的 `rootfs.img`。CI 额外打包 `.7z`、压缩包 `.sha256` 和内容 `.contents.sha256`，并按输入决定是否发布到 GitHub Release。
 
-2. 在电脑上安装 `adb`、`fastboot` 刷机工具，并配置环境变量
+## 持久化 `/home`
 
-3. 解压下载的 `.7z` 镜像压缩包，获取 `rootfs.img`、`xiaomi-k20pro-boot.img` 下载[u-boot.img](https://github.com/fusion-hxf/linux-uboot/releases/tag/v1.0.0)（选择最近日期版本）
+默认启用 `PERSISTENT_HOME=1`。镜像会固定 `/` 的 ext4 大小，不再通过 `x-systemd.growfs` 吃满整个 `userdata` 分区；启动时由 `raphael-persistent-home.service` 把 `userdata` 分区 `16G` 之后的空间映射为 loop ext4，并挂载到 `/home`。
 
-### 刷机命令
+默认布局：
 
-```Plain Text
-# 1. 进入 Fastboot 模式
-adb reboot bootloader
+```text
+userdata
+├── 0 - IMAGE_SIZE       /
+├── IMAGE_SIZE - 16G     预留空洞，便于 rootfs 后续增长
+└── 16G - end            /home
+```
 
-# 2. 擦除分区
-fastboot erase dtbo
+关键参数：
+
+- `PERSISTENT_HOME=1`：启用持久 `/home`。
+- `PERSISTENT_HOME_OFFSET=16G`：`/home` 起始 offset。已有数据后不要随意修改。
+- `PERSISTENT_HOME=0`：回到旧行为，`/` 使用 `x-systemd.growfs` 扩到整个 `userdata`。
+
+保留 `/home` 的刷机方式：
+
+```bash
 fastboot erase boot
 fastboot erase cache
-fastboot erase userdata
-
-# 3. 刷入 boot 镜像
+fastboot erase dtbo
 fastboot flash cache xiaomi-k20pro-boot.img
 fastboot flash boot u-boot.img
-
-# 4. 刷入系统镜像（需要先解压 rootfs.7z）
 fastboot flash userdata rootfs.img
-
-# 5. 重启设备
-fastboot reboot
 ```
 
-> 说明：`rootfs.img` 是 **Android 稀疏镜像 (sparse)**，可被 fastboot 直接刷写，只传输实际占用的数据块。
-> 首次开机后根分区会通过 fstab 的 `x-systemd.growfs` 自动扩容到整个 `userdata` 分区，无需手动操作。
-> 如需在本机挂载查看内容，请先用 `simg2img rootfs.img rootfs.raw.img` 还原为 raw 再 loop 挂载。
+不要执行 `fastboot erase userdata`，否则 `/home` 也会被清掉。初次切换到该方案时，允许清空一次 `userdata`，之后测试重刷 rootfs 时只执行 `fastboot flash userdata rootfs.img`。
 
-## ❓ 常见问题 FAQ
+## 支持的系统类型
 
-- 什么破玩意儿，开机就卡死了？？？（请拔掉sim卡）
+- `debian-server`
+- `debian-gnome`
+- `debian-phosh`
+- `ubuntu-server`
+- `ubuntu-gnome`
+- `ubuntu-phosh`
 
-- **刷 `userdata` 时报 `std::bad_alloc`**：这是旧版（raw 格式）镜像太大、fastboot 一次性分配内存失败导致的。本仓库新构建的 `rootfs.img` 已是稀疏镜像，不会再有此问题；若手头仍是旧 raw 镜像，可用 `img2simg rootfs.img rootfs_sparse.img`（来自 `android-sdk-libsparse-utils`）转成稀疏镜像后再 `fastboot flash userdata rootfs_sparse.img`。
+默认内核版本为 `7.1`，默认 Debian 版本为 `trixie`，默认 Ubuntu 版本为 `resolute`。
 
-- **Windows 无法连接设备 CDC NCM 驱动**：参考解决方案视频[BV1tW4y1A79V](https://www.bilibili.com/video/BV1tW4y1A79V/)
+脚本现在会默认安装 ALSA 基础包、PipeWire、PipeWire Pulse 兼容层和 WirePlumber，并要求 `alsa-xiaomi-raphael.deb` 存在。默认用户会加入 `audio`、`video`、`render`、`input` 等设备相关组。Plasma 当前不是本构建矩阵的一部分；如需正式支持 Plasma，应新增独立系统类型并显式维护 Plasma 包集。
 
-- **Server 版如何联网**：
-        
+## CI 构建
 
-    1. OTG 外接网线，系统自动识别联网
+`构建系统镜像` workflow 的默认输入是：
 
-    2. OTG 外接键盘，终端输入 `nmtui` 可视化连接 Wi-Fi
+- `system_types`: `ubuntu-server`
+- `kernel_versions`: `7.1`
+- `bootstrap_tools`: `mmdebstrap`
+- `kernel_repository`: `fusion-hxf/kernel-deb`
+- `kernel_release_tag`: 留空，自动使用 `kernel-v<kernel_version>`
 
-    3. USB 连接电脑，安装 NCM 驱动后，通过 `nmtui` 配置网络
+CI 会复用 `scripts/00-download-deps.sh` 下载依赖，再执行 `build.sh`。如果 ALSA 配置包缺失，构建会直接失败，避免生成缺少声卡用户态配置的镜像。
 
-## 🙏 致谢
+## 设备不变量
 
-本项目基于众多开源项目与开发者成果开发，特此致谢：
-
-- Linux 内核官方开发团队、Debian / Ubuntu 开源社区、Phosh 桌面开发团队
-
-- [@璀璨梦星](https://github.com/ccmx200)：项目优化与创新思路支持
-
-- [@map220v](https://github.com/map220v/ubuntu-xiaomi-nabu)：上游项目参考
-
-- [@Pc1598](https://github.com/Pc1598)：sm8150-mainline-raphael 设备内核维护
-
-- [Aospa\-raphael\-unofficial/linux](https://github.com/Aospa-raphael-unofficial/linux)、[sm8150\-mainline/linux](https://gitlab.postmarketos.org/soc/qualcomm-sm8150/linux)：内核源码支持
-
-- 所有开源贡献者与项目使用者
+- rootfs 固定 UUID：`ee8d3593-59b1-480e-a3b6-4fefb17ee7d8`
+- `/boot` 位于手机 `cache` 分区，刷入 `xiaomi-k20pro-boot.img`
+- `boot` 分区刷入 `u-boot.img`
+- USB NCM 地址：`172.16.42.1`
+- 默认用户：`user` / `1234`
+- 默认 root：`root` / `1234`
