@@ -26,6 +26,9 @@
 
 ## 本地构建
 
+下载入口需要 `curl`、`unzip`、`dpkg-deb`、Python 3 和 `fdtget`；Debian/Ubuntu 可安装
+`device-tree-compiler` 提供 `fdtget`。
+
 先下载内核包、cache boot image 和 U-Boot：
 
 ```bash
@@ -39,7 +42,15 @@ bash scripts/00-download-deps.sh 7.1 fusion-hxf/kernel-deb
 - `firmware-xiaomi-raphael.deb`
 - `alsa-xiaomi-raphael.deb`
 - `xiaomi-k20pro-boot.img`
-- `u-boot.img`（从 GengWei v1.0.0 release 下载后，提取 `linux-image` deb 中的 `sm8150-xiaomi-raphael.dtb` 重新打包）
+- `u-boot.img` / `u-boot-safe.img`
+- `u-boot-audio-test.img`
+- `u-boot-venus-test.img`
+- `u-boot-bringup-test.img`
+- `u-boot-variants.tsv`（包含 DTB 首个 `compatible` 与 SHA-256）
+
+这些镜像复用 GengWei v1.0.0 U-Boot 二进制，仅替换 control DTB。其首个
+`compatible` 决定 U-Boot 随后从 `/boot/dtbs/qcom/` 加载哪一份 Linux DTB；构建会用
+`fdtget` 校验 safe、audio、Venus 和 combined 四个选择键，防止实验镜像仍加载 safe DTB。
 
 构建默认 Ubuntu Server 镜像：
 

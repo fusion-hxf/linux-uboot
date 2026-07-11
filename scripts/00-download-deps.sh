@@ -51,7 +51,8 @@ sha256_file() {
 repack_uboot_variants() {
 	local kernel_deb="$1"
 	local workdir base_img dtb tmp_dest manifest_tmp
-	local kernel_package kernel_version base_sha dtb_sha image_sha safe_dtb_sha=""
+	local kernel_package kernel_version base_sha dtb_sha image_sha first_compatible
+	local safe_dtb_sha="" safe_compatible=""
 	local i
 	local dtb_names=(
 		"sm8150-xiaomi-raphael.dtb"
@@ -60,6 +61,12 @@ repack_uboot_variants() {
 		"sm8150-xiaomi-raphael-bringup-test.dtb"
 	)
 	local variant_names=("safe" "audio-test" "venus-test" "bringup-test")
+	local expected_compatibles=(
+		"xiaomi,raphael"
+		"xiaomi,raphael-audio-test"
+		"xiaomi,raphael-venus-test"
+		"xiaomi,raphael-bringup-test"
+	)
 	local outputs=(
 		"$UBOOT_IMG"
 		"$UBOOT_AUDIO_TEST_IMG"
@@ -69,6 +76,7 @@ repack_uboot_variants() {
 
 	command -v dpkg-deb >/dev/null 2>&1 || die "缺少 dpkg-deb，无法从内核包提取 DTB"
 	command -v python3 >/dev/null 2>&1 || die "缺少 python3，无法重新打包 U-Boot"
+	command -v fdtget >/dev/null 2>&1 || die "缺少 fdtget，请安装 device-tree-compiler"
 	mkdir -p "$(dirname "$UBOOT_IMG")" \
 		"$(dirname "$UBOOT_SAFE_IMG")" \
 		"$(dirname "$UBOOT_AUDIO_TEST_IMG")" \
@@ -90,19 +98,22 @@ repack_uboot_variants() {
 	manifest_tmp="${UBOOT_MANIFEST}.tmp"
 
 	{
-		printf 'format=raphael-uboot-variants-v1\n'
+		printf 'format=raphael-uboot-variants-v2\n'
 		printf 'generated_utc=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 		printf 'kernel_deb=%s\n' "$(basename "$kernel_deb")"
 		printf 'kernel_package=%s\n' "$kernel_package"
 		printf 'kernel_version=%s\n' "$kernel_version"
 		printf 'base_uboot_url=%s\n' "$UBOOT_IMG_URL"
 		printf 'base_uboot_sha256=%s\n' "$base_sha"
-		printf 'variant\tdtb\tdtb_sha256\timage\timage_sha256\n'
+		printf 'variant\tdtb\tfirst_compatible\tdtb_sha256\timage\timage_sha256\n'
 	} > "$manifest_tmp"
 
 	for i in "${!dtb_names[@]}"; do
 		dtb="$(find "$workdir/kernel" -type f -name "${dtb_names[$i]}" -print -quit)"
 		[ -n "$dtb" ] || die "内核包中未找到 ${dtb_names[$i]}: $kernel_deb"
+		first_compatible="$(fdtget -t s "$dtb" / compatible | awk '{print $1}')"
+		[ "$first_compatible" = "${expected_compatibles[$i]}" ] || \
+			die "${dtb_names[$i]} 首个 compatible 错误: $first_compatible（期望 ${expected_compatibles[$i]}）"
 
 		tmp_dest="${outputs[$i]}.tmp"
 		rm -f "$tmp_dest"
@@ -115,9 +126,10 @@ repack_uboot_variants() {
 		image_sha="$(sha256_file "${outputs[$i]}")"
 		if [ "$i" -eq 0 ]; then
 			safe_dtb_sha="$dtb_sha"
+			safe_compatible="$first_compatible"
 		fi
-		printf '%s\t%s\t%s\t%s\t%s\n' \
-			"${variant_names[$i]}" "${dtb_names[$i]}" "$dtb_sha" \
+		printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+			"${variant_names[$i]}" "${dtb_names[$i]}" "$first_compatible" "$dtb_sha" \
 			"$(basename "${outputs[$i]}")" "$image_sha" >> "$manifest_tmp"
 	done
 
@@ -125,8 +137,8 @@ repack_uboot_variants() {
 	# explicit alias so test instructions cannot confuse it with a test DTB.
 	if [ "$UBOOT_SAFE_IMG" != "$UBOOT_IMG" ]; then
 		cp -f "$UBOOT_IMG" "$UBOOT_SAFE_IMG"
-		printf 'safe-alias\t%s\t%s\t%s\t%s\n' \
-			"${dtb_names[0]}" "$safe_dtb_sha" \
+		printf 'safe-alias\t%s\t%s\t%s\t%s\t%s\n' \
+			"${dtb_names[0]}" "$safe_compatible" "$safe_dtb_sha" \
 			"$(basename "$UBOOT_SAFE_IMG")" "$(sha256_file "$UBOOT_SAFE_IMG")" \
 			>> "$manifest_tmp"
 	fi

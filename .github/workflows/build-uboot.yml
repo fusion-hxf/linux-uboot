@@ -35,7 +35,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           sudo apt-get update
-          sudo apt-get install -y ca-certificates curl unzip python3 dpkg
+          sudo apt-get install -y ca-certificates curl unzip python3 dpkg device-tree-compiler
 
       - name: 下载 U-Boot 和内核 deb
         env:
@@ -64,6 +64,12 @@ jobs:
             sm8150-xiaomi-raphael-bringup-test.dtb
           )
           VARIANTS=(safe audio-test venus-test bringup-test)
+          EXPECTED_COMPATIBLES=(
+            xiaomi,raphael
+            xiaomi,raphael-audio-test
+            xiaomi,raphael-venus-test
+            xiaomi,raphael-bringup-test
+          )
           OUTPUTS=(
             u-boot.img
             u-boot-audio-test.img
@@ -72,10 +78,10 @@ jobs:
           )
 
           {
-            echo 'format=raphael-uboot-variants-v1'
+            echo 'format=raphael-uboot-variants-v2'
             echo "base_uboot_url=$BASE_UBOOT_URL"
             echo "base_uboot_sha256=$(sha256sum u-boot-base.img | awk '{print $1}')"
-            printf 'variant\tdtb\tdtb_sha256\timage\timage_sha256\n'
+            printf 'variant\tdtb\tfirst_compatible\tdtb_sha256\timage\timage_sha256\n'
           } > u-boot-variants.tsv
 
           for i in "${!DTBS[@]}"; do
@@ -85,9 +91,14 @@ jobs:
               find kernel-root -type f -name 'sm8150-xiaomi-raphael*.dtb' -print
               exit 1
             }
+            first_compatible="$(fdtget -t s "$dtb" / compatible | awk '{print $1}')"
+            [ "$first_compatible" = "${EXPECTED_COMPATIBLES[$i]}" ] || {
+              echo "::error::${DTBS[$i]} 首个 compatible 为 $first_compatible，期望 ${EXPECTED_COMPATIBLES[$i]}"
+              exit 1
+            }
             python3 repack-uboot.py u-boot-base.img "$dtb" "${OUTPUTS[$i]}"
-            printf '%s\t%s\t%s\t%s\t%s\n' \
-              "${VARIANTS[$i]}" "${DTBS[$i]}" \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "${VARIANTS[$i]}" "${DTBS[$i]}" "$first_compatible" \
               "$(sha256sum "$dtb" | awk '{print $1}')" "${OUTPUTS[$i]}" \
               "$(sha256sum "${OUTPUTS[$i]}" | awk '{print $1}')" \
               >> u-boot-variants.tsv
