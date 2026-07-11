@@ -26,9 +26,14 @@ Environment:
   UBUNTU_VERSION       Ubuntu suite for ubuntu-* images, default: resolute
   BOOT_IMG             cache boot image path, default: xiaomi-k20pro-boot.img
   BOOT_IMG_URL         cache boot image download URL (used by 00-download-deps.sh)
-  UBOOT_IMG            repacked U-Boot image path, default: u-boot.img
+  UBOOT_IMG            safe repacked U-Boot image path, default: u-boot.img
+  UBOOT_SAFE_IMG       explicit safe alias, default: u-boot-safe.img
+  UBOOT_AUDIO_TEST_IMG audio-only bring-up image, default: u-boot-audio-test.img
+  UBOOT_VENUS_TEST_IMG Venus-only bring-up image, default: u-boot-venus-test.img
+  UBOOT_BRINGUP_TEST_IMG combined image, default: u-boot-bringup-test.img
   KERNEL_DEBS_DIR      kernel deb directory, default: xiaomi-raphael-debs_<version>
   REQUIRE_ALSA_DEB     require alsa-xiaomi-raphael.deb, default: 1
+  INCLUDE_BRINGUP_TOOLS install optional hardware diagnostics, default: 1
   PERSISTENT_HOME      create persistent /home in userdata tail, default: 1
   PERSISTENT_HOME_OFFSET start offset for persistent /home, default: 16G
 EOF
@@ -217,3 +222,6 @@ log "构建完成"
 log "产物文件:"
 ls -lh rootfs.img 2>/dev/null || true
 ls -lh rootfs.7z 2>/dev/null || true
+ls -lh u-boot.img u-boot-safe.img u-boot-audio-test.img \
+  u-boot-venus-test.img u-boot-bringup-test.img u-boot-variants.tsv \
+  2>/dev/null || true

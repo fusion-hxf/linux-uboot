@@ -12,6 +12,7 @@ DEBIAN_VERSION="${DEBIAN_VERSION:-trixie}"
 UBUNTU_VERSION="${UBUNTU_VERSION:-resolute}"
 KERNEL_DEBS_DIR="${KERNEL_DEBS_DIR:-xiaomi-raphael-debs_${KERNEL_VERSION:-7.1}}"
 REQUIRE_ALSA_DEB="${REQUIRE_ALSA_DEB:-1}"
+INCLUDE_BRINGUP_TOOLS="${INCLUDE_BRINGUP_TOOLS:-1}"
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06] 📦 安装软件包"
 
@@ -21,15 +22,15 @@ echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 更新系统包..."
 chroot rootdir apt-get update
 chroot rootdir apt-get upgrade -y
 
-BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata iproute2 zram-tools e2fsprogs util-linux"
+BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata iproute2 iputils-ping iw rfkill ethtool zram-tools e2fsprogs util-linux"
 
 if [[ "$SYSTEM_TYPE" == *"debian-"* ]]; then 
-    BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata fonts-wqy-microhei dnsmasq nftables iproute2 zram-tools e2fsprogs util-linux"
+    BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata fonts-wqy-microhei dnsmasq nftables iproute2 iputils-ping iw rfkill ethtool zram-tools e2fsprogs util-linux"
 elif [[ "$SYSTEM_TYPE" == *"ubuntu-"* ]]; then
     if [[ "$SYSTEM_TYPE" == *"server"* ]]; then
-        BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata dnsmasq nftables iproute2 zram-tools e2fsprogs util-linux"
+        BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata dnsmasq nftables iproute2 iputils-ping iw rfkill ethtool zram-tools e2fsprogs util-linux"
     else
-        BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata dnsmasq nftables iproute2 zram-tools e2fsprogs util-linux"
+        BASE_PACKAGES="bash-completion sudo apt-utils ssh openssh-server nano network-manager initramfs-tools chrony curl wget locales tzdata dnsmasq nftables iproute2 iputils-ping iw rfkill ethtool zram-tools e2fsprogs util-linux"
     fi
 fi
 
@@ -73,6 +74,27 @@ fi
 
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 开始安装（这可能需要几分钟...）"
 chroot rootdir apt-get install -y $ALL_PACKAGES
+
+# Bring-up tools are deliberately best-effort: package names vary slightly
+# between Debian and Ubuntu suites, and a missing optional diagnostic must not
+# fail the whole image build.
+if [ "$INCLUDE_BRINGUP_TOOLS" = "1" ]; then
+    BRINGUP_PACKAGES="tcpdump i2c-tools v4l-utils ffmpeg gstreamer1.0-tools mesa-utils vulkan-tools libdrm-tests vainfo kmscube alsa-tools strace lsof usbutils"
+    AVAILABLE_BRINGUP_PACKAGES=""
+
+    for package in $BRINGUP_PACKAGES; do
+        if chroot rootdir apt-cache show "$package" >/dev/null 2>&1; then
+            AVAILABLE_BRINGUP_PACKAGES="$AVAILABLE_BRINGUP_PACKAGES $package"
+        else
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 可选诊断包不可用，跳过: $package"
+        fi
+    done
+
+    if [ -n "$AVAILABLE_BRINGUP_PACKAGES" ]; then
+        echo "[$(date +'%Y-%m-%d %H:%M:%S')] [06]   └─ 安装硬件诊断包:$AVAILABLE_BRINGUP_PACKAGES"
+        chroot rootdir apt-get install -y $AVAILABLE_BRINGUP_PACKAGES
+    fi
+fi
 
 # [P0] systemd-resolved：DNS 解析收口到 resolved（最终配置见 15-cleanup.sh）
 # [P1] earlyoom：内存压力下优雅杀进程，避免整机硬卡死（配置见 14-config-zram.sh）

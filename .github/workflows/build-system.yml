@@ -66,6 +66,11 @@ env:
   HOSTNAME: xiaomi-raphael
   BOOT_IMG: xiaomi-k20pro-boot.img
   UBOOT_IMG: u-boot.img
+  UBOOT_SAFE_IMG: u-boot-safe.img
+  UBOOT_AUDIO_TEST_IMG: u-boot-audio-test.img
+  UBOOT_VENUS_TEST_IMG: u-boot-venus-test.img
+  UBOOT_BRINGUP_TEST_IMG: u-boot-bringup-test.img
+  UBOOT_MANIFEST: u-boot-variants.tsv
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   SUPPRESS_DEPRECATION_WARNINGS: true
 
@@ -219,7 +224,8 @@ jobs:
           set -Eeuo pipefail
           ls -lh "xiaomi-raphael-debs_${KERNEL_VERSION}"
           ls -lh xiaomi-k20pro-boot.img
-          ls -lh u-boot.img
+          ls -lh u-boot.img u-boot-safe.img u-boot-audio-test.img \
+            u-boot-venus-test.img u-boot-bringup-test.img u-boot-variants.tsv
           dpkg-deb -f "xiaomi-raphael-debs_${KERNEL_VERSION}/linux-image-xiaomi-raphael.deb" Package Version Architecture
           dpkg-deb -f "xiaomi-raphael-debs_${KERNEL_VERSION}/firmware-xiaomi-raphael.deb" Package Version Architecture
           dpkg-deb -f "xiaomi-raphael-debs_${KERNEL_VERSION}/alsa-xiaomi-raphael.deb" Package Version Architecture
@@ -249,8 +255,17 @@ jobs:
           echo "filename=$FILENAME" >> "$GITHUB_OUTPUT"
           echo "artifact_name=$FILENAME" >> "$GITHUB_OUTPUT"
 
-          sha256sum rootfs.img xiaomi-k20pro-boot.img u-boot.img > "${FILENAME}.contents.sha256"
-          7z a "${FILENAME}.7z" rootfs.img xiaomi-k20pro-boot.img u-boot.img
+          UBOOT_FILES=(
+            u-boot.img
+            u-boot-safe.img
+            u-boot-audio-test.img
+            u-boot-venus-test.img
+            u-boot-bringup-test.img
+            u-boot-variants.tsv
+          )
+          sha256sum rootfs.img xiaomi-k20pro-boot.img "${UBOOT_FILES[@]}" \
+            > "${FILENAME}.contents.sha256"
+          7z a "${FILENAME}.7z" rootfs.img xiaomi-k20pro-boot.img "${UBOOT_FILES[@]}"
           sha256sum "${FILENAME}.7z" > "${FILENAME}.sha256"
           ls -lh "${FILENAME}.7z" "${FILENAME}.sha256" "${FILENAME}.contents.sha256"
 
@@ -269,7 +284,10 @@ jobs:
         run: |
           sudo rm -rf rootdir 2>/dev/null || true
           sudo rm -rf xiaomi-raphael-debs_* 2>/dev/null || true
-          sudo rm -f rootfs.img xiaomi-k20pro-boot.img u-boot.img u-boot.img.zip 2>/dev/null || true
+          sudo rm -f rootfs.img xiaomi-k20pro-boot.img \
+            u-boot.img u-boot-safe.img u-boot-audio-test.img \
+            u-boot-venus-test.img u-boot-bringup-test.img u-boot-variants.tsv \
+            u-boot.img.zip 2>/dev/null || true
 
   release:
     needs: [generate-matrix, build]
@@ -302,6 +320,8 @@ jobs:
             echo "- root / 1234"
             echo ""
             echo "USB NCM: 172.16.42.1"
+            echo ""
+            echo "U-Boot/DTB 变体: safe、audio-test、venus-test、bringup-test；首次刷写请从 safe 开始。"
             echo ""
             echo "### 产物"
           } > release-notes.md

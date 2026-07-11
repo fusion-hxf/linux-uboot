@@ -29,6 +29,28 @@ cat > rootdir/etc/NetworkManager/conf.d/wifi-powersave.conf << 'EOF'
 [connection]
 wifi.powersave = 2
 EOF
+
+# WCN3990 bring-up favors a stable permanent scan address.  NetworkManager's
+# scan randomization can otherwise cause unnecessary address transitions while
+# we are collecting association/beacon-loss evidence.
+cat > rootdir/etc/NetworkManager/conf.d/20-wifi-bringup.conf << 'EOF'
+[device]
+wifi.scan-rand-mac-address=no
+EOF
+
+# A regular SSH login is not an "active local seat", so the default polkit
+# policy can let nmtui scan but reject activation.  The image already places
+# the device user in netdev; grant that group NetworkManager management rights.
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13]   └─ 允许 netdev 用户管理 NetworkManager"
+mkdir -p rootdir/etc/polkit-1/rules.d
+cat > rootdir/etc/polkit-1/rules.d/49-raphael-networkmanager.rules << 'EOF'
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.isInGroup("netdev")) {
+        return polkit.Result.YES;
+    }
+});
+EOF
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13]   └─ 配置 ath10k 无线参数"
 mkdir -p rootdir/etc/modprobe.d
 cat > rootdir/etc/modprobe.d/ath10k.conf << 'EOF'

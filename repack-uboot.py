@@ -23,20 +23,51 @@ img = open(src, 'rb').read()
 if img[:8] != b'ANDROID!':
     sys.exit("源不是 Android boot image (magic 不符)")
 
+header_size = 1632
+if len(img) < header_size:
+    sys.exit("源 Android boot image 头部不完整")
+
 # 头部参数原样沿用（page/各 addr），保证与源镜像结构一致
 page = struct.unpack('<I', img[36:40])[0]
 ksz  = struct.unpack('<I', img[8:12])[0]
+ramdisk_size = struct.unpack('<I', img[16:20])[0]
+second_size = struct.unpack('<I', img[24:28])[0]
 kaddr, raddr, saddr, tags = (struct.unpack('<I', img[o:o+4])[0] for o in (12, 20, 28, 32))
+
+if page < header_size or page & (page - 1):
+    sys.exit("源镜像 page size 非法: %d" % page)
+if ramdisk_size or second_size:
+    sys.exit("源镜像包含 ramdisk/second stage，拒绝静默丢弃")
+if not ksz or page + ksz > len(img):
+    sys.exit("源镜像 kernel payload 长度越界")
+
+def align(value):
+    return (value + page - 1) // page * page
+
+if len(img) != page + align(ksz):
+    sys.exit("源镜像含未识别的尾部数据，拒绝重打包")
 
 # 从 kernel 负载里拆出 u-boot.gz（gzip 流自终止，unused_data 即追加的旧 dtb）
 payload = img[page:page+ksz]
 do = zlib.decompressobj(31)
-do.decompress(payload)
+try:
+    do.decompress(payload)
+except zlib.error as exc:
+    sys.exit("源 kernel payload 不是有效 gzip: %s" % exc)
+if not do.eof:
+    sys.exit("源 U-Boot gzip 流不完整")
 gz = payload[:len(payload) - len(do.unused_data)]
+old_dtb = do.unused_data
+if len(old_dtb) < 8 or old_dtb[:4] != bytes.fromhex('d00dfeed'):
+    sys.exit("源 U-Boot gzip 后没有合法追加 DTB")
+if struct.unpack('>I', old_dtb[4:8])[0] != len(old_dtb):
+    sys.exit("源追加 DTB totalsize 与实际长度不符")
 
 newdtb = open(newdtb_path, 'rb').read()
-if newdtb[:4] != bytes.fromhex('d00dfeed'):
+if len(newdtb) < 8 or newdtb[:4] != bytes.fromhex('d00dfeed'):
     sys.exit("新 dtb 不是合法 FDT (magic 应为 d00dfeed)")
+if struct.unpack('>I', newdtb[4:8])[0] != len(newdtb):
+    sys.exit("新 dtb totalsize 与实际长度不符")
 
 kernel = gz + newdtb     # 复用的 u-boot.gz + 新 dtb
 
