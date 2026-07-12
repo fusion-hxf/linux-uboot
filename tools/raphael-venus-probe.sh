@@ -14,6 +14,7 @@ LOG="$OUT_DIR/probe.log"
 KMSG="$OUT_DIR/kmsg-follow.log"
 SYNC_PID=""
 KMSG_PID=""
+OLD_CONSOLE_LOGLEVEL=""
 
 if ! findmnt -rn /home >/dev/null; then
 	echo "拒绝探测：/home 未挂载，无法保证 watchdog 重启后日志仍在" >&2
@@ -34,6 +35,8 @@ cleanup() {
 
 	[ -z "$KMSG_PID" ] || kill "$KMSG_PID" 2>/dev/null || true
 	[ -z "$SYNC_PID" ] || kill "$SYNC_PID" 2>/dev/null || true
+	[ -z "$OLD_CONSOLE_LOGLEVEL" ] ||
+		dmesg -n "$OLD_CONSOLE_LOGLEVEL" 2>/dev/null || true
 	dmesg > "$OUT_DIR/dmesg-exit.txt" 2>/dev/null || true
 	echo "$rc" > "$OUT_DIR/exit-status.txt"
 	chown -R "$USER_NAME:$USER_NAME" "$OUT_DIR" 2>/dev/null || true
@@ -43,6 +46,13 @@ cleanup() {
 trap cleanup EXIT
 
 checkpoint "Venus manual probe start; output=$OUT_DIR"
+
+# dev_info() breadcrumbs are level 6.  Raise the console threshold so ramoops
+# receives them as well as the printk ring buffer; restore it on a clean exit.
+OLD_CONSOLE_LOGLEVEL="$(cut -d " " -f 1 /proc/sys/kernel/printk)"
+cat /proc/sys/kernel/printk > "$OUT_DIR/printk-before.txt"
+dmesg -n 8
+checkpoint "console loglevel raised: $OLD_CONSOLE_LOGLEVEL -> 8"
 
 echo "=== identity ==="
 uname -a
@@ -67,6 +77,18 @@ if grep -qw venus_core /proc/modules; then
 	checkpoint "venus_core was safety-gated; unloading before explicit probe"
 	modprobe -r venus_core
 fi
+
+# Load the media/V4L2 dependency stack through the driver's default safety
+# gate.  This keeps dependency initialization separate from the risky hardware
+# probe and makes the persisted trace start at the Venus-specific operation.
+checkpoint "preloading media dependencies through Iris1 safety gate"
+modprobe -v venus_core
+if [ -L /sys/bus/platform/devices/aa00000.video-codec/driver ]; then
+	echo "拒绝探测：安全预加载意外绑定了 Venus 驱动" >&2
+	exit 3
+fi
+modprobe -r venus_core
+checkpoint "media dependencies preloaded; venus_core unloaded"
 
 echo "=== pre-probe power and clocks ==="
 for attr in identity state timeout timeleft; do
@@ -109,6 +131,15 @@ checkpoint "modprobe returned successfully"
 sleep 2
 dmesg > "$OUT_DIR/dmesg-after.txt"
 lsmod > "$OUT_DIR/lsmod-after.txt"
+
+if [ ! -L /sys/bus/platform/devices/aa00000.video-codec/driver ]; then
+	echo "探测失败：modprobe 返回成功，但 aa00000.video-codec 未绑定" >&2
+	grep -iE 'venus|iris1|video-codec|firmware|gdsc|clock|reset|smmu|iommu' \
+		"$OUT_DIR/dmesg-after.txt" | tail -n 300 || true
+	modprobe -r venus_core 2>/dev/null || true
+	exit 5
+fi
+
 ls -l /dev/video* /dev/media* > "$OUT_DIR/video-nodes.txt" 2>&1 || true
 v4l2-ctl --list-devices > "$OUT_DIR/v4l2-devices.txt" 2>&1 || true
 
