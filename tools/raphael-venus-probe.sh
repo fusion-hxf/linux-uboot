@@ -17,13 +17,22 @@ KMSG_PID=""
 OLD_CONSOLE_LOGLEVEL=""
 VENUS_FW_STAGE="${VENUS_FW_STAGE:-1}"
 VENUS_CHECKPOINT_MS="${VENUS_CHECKPOINT_MS:-1500}"
+VENUS_FW_HOLD_MS="${VENUS_FW_HOLD_MS:-100}"
+VENUS_PROBE_STAGE="${VENUS_PROBE_STAGE:-0}"
 
 case "$VENUS_FW_STAGE" in
-	0|1|2|3|4) ;;
-	*) echo "VENUS_FW_STAGE 必须是 0(full)、1(map)、2(load)、3(auth-stop) 或 4(protect-stop)" >&2; exit 1 ;;
+	0|1|2|3|4|5) ;;
+	*) echo "VENUS_FW_STAGE 必须是 0(full)、1(map)、2(load)、3(auth-stop)、4(protect-stop) 或 5(hold-stop)" >&2; exit 1 ;;
 esac
 case "$VENUS_CHECKPOINT_MS" in
 	''|*[!0-9]*) echo "VENUS_CHECKPOINT_MS 必须是非负整数" >&2; exit 1 ;;
+esac
+case "$VENUS_FW_HOLD_MS" in
+	''|*[!0-9]*) echo "VENUS_FW_HOLD_MS 必须是非负整数" >&2; exit 1 ;;
+esac
+case "$VENUS_PROBE_STAGE" in
+	0|1|2|3|4) ;;
+	*) echo "VENUS_PROBE_STAGE 必须是 0(full)、1(boot-stop)、2(cfg-stop)、3(resume-stop) 或 4(init-stop)" >&2; exit 1 ;;
 esac
 
 if ! findmnt -rn /home >/dev/null; then
@@ -123,8 +132,8 @@ stdbuf -oL -eL dmesg --follow --human >"$KMSG" 2>&1 &
 KMSG_PID=$!
 (
 	while :; do
-		sync
-		sleep 1
+		sync -f "$KMSG" 2>/dev/null || sync
+		sleep 0.1
 	done
 ) &
 SYNC_PID=$!
@@ -135,10 +144,12 @@ if ! kill -0 "$KMSG_PID" 2>/dev/null; then
 	exit 4
 fi
 checkpoint "persistent logger active (pid=$KMSG_PID); loading venus_core explicitly"
-checkpoint "firmware diagnostic stage=$VENUS_FW_STAGE checkpoint_ms=$VENUS_CHECKPOINT_MS"
+checkpoint "diagnostic fw_stage=$VENUS_FW_STAGE hold_ms=$VENUS_FW_HOLD_MS probe_stage=$VENUS_PROBE_STAGE checkpoint_ms=$VENUS_CHECKPOINT_MS"
 modprobe -v venus_core allow_iris1_probe=1 \
 	iris1_fw_stage="$VENUS_FW_STAGE" \
-	iris1_fw_checkpoint_ms="$VENUS_CHECKPOINT_MS"
+	iris1_fw_checkpoint_ms="$VENUS_CHECKPOINT_MS" \
+	iris1_fw_hold_ms="$VENUS_FW_HOLD_MS" \
+	iris1_probe_stage="$VENUS_PROBE_STAGE"
 checkpoint "modprobe returned successfully"
 
 sleep 2
