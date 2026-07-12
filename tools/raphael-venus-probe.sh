@@ -15,6 +15,16 @@ KMSG="$OUT_DIR/kmsg-follow.log"
 SYNC_PID=""
 KMSG_PID=""
 OLD_CONSOLE_LOGLEVEL=""
+VENUS_FW_STAGE="${VENUS_FW_STAGE:-1}"
+VENUS_CHECKPOINT_MS="${VENUS_CHECKPOINT_MS:-1500}"
+
+case "$VENUS_FW_STAGE" in
+	0|1|2) ;;
+	*) echo "VENUS_FW_STAGE 必须是 0(full)、1(map-only) 或 2(load-only)" >&2; exit 1 ;;
+esac
+case "$VENUS_CHECKPOINT_MS" in
+	''|*[!0-9]*) echo "VENUS_CHECKPOINT_MS 必须是非负整数" >&2; exit 1 ;;
+esac
 
 if ! findmnt -rn /home >/dev/null; then
 	echo "拒绝探测：/home 未挂载，无法保证 watchdog 重启后日志仍在" >&2
@@ -125,7 +135,10 @@ if ! kill -0 "$KMSG_PID" 2>/dev/null; then
 	exit 4
 fi
 checkpoint "persistent logger active (pid=$KMSG_PID); loading venus_core explicitly"
-modprobe -v venus_core allow_iris1_probe=1
+checkpoint "firmware diagnostic stage=$VENUS_FW_STAGE checkpoint_ms=$VENUS_CHECKPOINT_MS"
+modprobe -v venus_core allow_iris1_probe=1 \
+	iris1_fw_stage="$VENUS_FW_STAGE" \
+	iris1_fw_checkpoint_ms="$VENUS_CHECKPOINT_MS"
 checkpoint "modprobe returned successfully"
 
 sleep 2
