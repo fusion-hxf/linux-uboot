@@ -19,8 +19,8 @@ VENUS_FW_STAGE="${VENUS_FW_STAGE:-1}"
 VENUS_CHECKPOINT_MS="${VENUS_CHECKPOINT_MS:-1500}"
 
 case "$VENUS_FW_STAGE" in
-	0|1|2) ;;
-	*) echo "VENUS_FW_STAGE 必须是 0(full)、1(map-only) 或 2(load-only)" >&2; exit 1 ;;
+	0|1|2|3|4) ;;
+	*) echo "VENUS_FW_STAGE 必须是 0(full)、1(map)、2(load)、3(auth-stop) 或 4(protect-stop)" >&2; exit 1 ;;
 esac
 case "$VENUS_CHECKPOINT_MS" in
 	''|*[!0-9]*) echo "VENUS_CHECKPOINT_MS 必须是非负整数" >&2; exit 1 ;;
