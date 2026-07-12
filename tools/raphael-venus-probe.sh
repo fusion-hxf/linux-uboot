@@ -1,0 +1,119 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+	echo "请使用 sudo 运行: sudo $0" >&2
+	exit 1
+fi
+
+USER_NAME="${SUDO_USER:-user}"
+BASE_DIR="${1:-/home/$USER_NAME/venus-bringup}"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+OUT_DIR="$BASE_DIR/$STAMP"
+LOG="$OUT_DIR/probe.log"
+KMSG="$OUT_DIR/kmsg-follow.log"
+SYNC_PID=""
+KMSG_PID=""
+
+if ! findmnt -rn /home >/dev/null; then
+	echo "拒绝探测：/home 未挂载，无法保证 watchdog 重启后日志仍在" >&2
+	exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+chmod 0755 "$BASE_DIR" "$OUT_DIR"
+exec > >(tee -a "$LOG") 2>&1
+
+checkpoint() {
+	echo "[$(date --iso-8601=seconds)] $*"
+	sync
+}
+
+cleanup() {
+	local rc=$?
+
+	[ -z "$KMSG_PID" ] || kill "$KMSG_PID" 2>/dev/null || true
+	[ -z "$SYNC_PID" ] || kill "$SYNC_PID" 2>/dev/null || true
+	dmesg > "$OUT_DIR/dmesg-exit.txt" 2>/dev/null || true
+	echo "$rc" > "$OUT_DIR/exit-status.txt"
+	chown -R "$USER_NAME:$USER_NAME" "$OUT_DIR" 2>/dev/null || true
+	sync
+	exit "$rc"
+}
+trap cleanup EXIT
+
+checkpoint "Venus manual probe start; output=$OUT_DIR"
+
+echo "=== identity ==="
+uname -a
+findmnt /home
+modinfo venus_core > "$OUT_DIR/venus-core-modinfo.txt"
+sha256sum "$(modinfo -n venus_core)" > "$OUT_DIR/venus-core.sha256"
+tr '\0' '\n' </proc/device-tree/model
+tr '\0' '\n' </proc/device-tree/compatible
+tr '\0' '\n' </proc/device-tree/soc@0/video-codec@aa00000/status
+
+if ! tr '\0' '\n' </proc/device-tree/compatible |
+	grep -qx 'xiaomi,raphael-venus-test'; then
+	echo "拒绝探测：当前不是 venus-test DTB" >&2
+	exit 2
+fi
+
+if grep -qw venus_core /proc/modules; then
+	if [ -L /sys/bus/platform/devices/aa00000.video-codec/driver ]; then
+		echo "拒绝探测：venus_core 已绑定，避免重复触碰硬件" >&2
+		exit 3
+	fi
+	checkpoint "venus_core was safety-gated; unloading before explicit probe"
+	modprobe -r venus_core
+fi
+
+echo "=== pre-probe power and clocks ==="
+for attr in identity state timeout timeleft; do
+	[ ! -r "/sys/class/watchdog/watchdog0/$attr" ] ||
+		printf '%s=%s\n' "$attr" "$(cat "/sys/class/watchdog/watchdog0/$attr")"
+done
+grep -iE 'venus|vcodec|mmcx' \
+	/sys/kernel/debug/pm_genpd/pm_genpd_summary 2>/dev/null || true
+grep -iE 'gcc_video_axi[0-9c]_clk|video_cc_(mvsc|mvs0)_core_clk' \
+	/sys/kernel/debug/clk/clk_summary 2>/dev/null || true
+dmesg > "$OUT_DIR/dmesg-before.txt"
+cp /sys/kernel/debug/pm_genpd/pm_genpd_summary \
+	"$OUT_DIR/pm-genpd-before.txt" 2>/dev/null || true
+cp /sys/kernel/debug/clk/clk_summary \
+	"$OUT_DIR/clk-summary-before.txt" 2>/dev/null || true
+mkdir -p "$OUT_DIR/pstore-before"
+cp -a /sys/fs/pstore/. "$OUT_DIR/pstore-before/" 2>/dev/null || true
+
+# Follow printk into persistent /home.  The sync loop limits loss if the NoC
+# wedges and the hardware watchdog resets the phone before userspace can exit.
+stdbuf -oL -eL dmesg --follow --human >"$KMSG" 2>&1 &
+KMSG_PID=$!
+(
+	while :; do
+		sync
+		sleep 1
+	done
+) &
+SYNC_PID=$!
+
+sleep 2
+if ! kill -0 "$KMSG_PID" 2>/dev/null; then
+	echo "拒绝探测：persistent kmsg logger 未保持运行" >&2
+	exit 4
+fi
+checkpoint "persistent logger active (pid=$KMSG_PID); loading venus_core explicitly"
+modprobe -v venus_core allow_iris1_probe=1
+checkpoint "modprobe returned successfully"
+
+sleep 2
+dmesg > "$OUT_DIR/dmesg-after.txt"
+lsmod > "$OUT_DIR/lsmod-after.txt"
+ls -l /dev/video* /dev/media* > "$OUT_DIR/video-nodes.txt" 2>&1 || true
+v4l2-ctl --list-devices > "$OUT_DIR/v4l2-devices.txt" 2>&1 || true
+
+echo "=== driver ==="
+readlink /sys/bus/platform/devices/aa00000.video-codec/driver || true
+cat "$OUT_DIR/video-nodes.txt"
+cat "$OUT_DIR/v4l2-devices.txt"
+checkpoint "Venus manual probe complete"

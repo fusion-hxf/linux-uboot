@@ -14,6 +14,7 @@
 | `config/build-config.sh` | 系统类型、镜像大小、发行版源配置 |
 | `scripts/00-download-deps.sh` | 下载内核 deb、ALSA 配置、cache boot image 和 U-Boot |
 | `scripts/01-16` | rootfs 创建、bootstrap、系统配置、内核安装和收尾 |
+| `tools/raphael-venus-probe.sh` | 在持久日志启动后手动探测实验性 Venus 驱动 |
 | `.github/workflows/build-system.yml` | rootfs 镜像 CI 构建和 release |
 | `.github/workflows/build-uboot.yml` | 实验性的 U-Boot boot image 构建 |
 | `repack-uboot.py` | 复用已知可启动 U-Boot 二进制，只替换追加 DTB |

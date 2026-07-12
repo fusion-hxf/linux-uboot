@@ -57,6 +57,23 @@ cat > rootdir/etc/modprobe.d/ath10k.conf << 'EOF'
 options ath10k_core skip_otp=y
 EOF
 
+# Venus bring-up can hang the NoC before the kernel has a chance to panic.
+# Keep alias-based autoload disabled so the experimental DT can boot to SSH;
+# the diagnostic helper explicitly loads venus_core after persistent logging
+# has started.  An explicit `modprobe venus_core` is not blocked by blacklist.
+echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13]   └─ 配置 Venus 手动探测与持久日志"
+cat > rootdir/etc/modprobe.d/raphael-venus-bringup.conf << 'EOF'
+# Temporary safety gate for SM8150/Iris1 bring-up.
+blacklist venus_core
+EOF
+
+install -Dm0755 tools/raphael-venus-probe.sh \
+    rootdir/usr/local/sbin/raphael-venus-probe.sh
+
+# Refresh the initramfs after adding the blacklist.  This prevents udev in the
+# initramfs from probing Venus before /home and SSH are available.
+chroot rootdir update-initramfs -u -k all
+
 # [P0] 让 NetworkManager 不接管 usb0，避免与 usb-ncm.service + dnsmasq
 # （静态 IP + DHCP 服务端）冲突
 echo "[$(date +'%Y-%m-%d %H:%M:%S')] [13]   └─ 标记 usb0 为 NetworkManager 非托管"
