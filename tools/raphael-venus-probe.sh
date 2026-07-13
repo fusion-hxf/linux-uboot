@@ -19,6 +19,7 @@ VENUS_FW_STAGE="${VENUS_FW_STAGE:-1}"
 VENUS_CHECKPOINT_MS="${VENUS_CHECKPOINT_MS:-1500}"
 VENUS_FW_HOLD_MS="${VENUS_FW_HOLD_MS:-100}"
 VENUS_PROBE_STAGE="${VENUS_PROBE_STAGE:-0}"
+VENUS_PAS_PRE_SHUTDOWN="${VENUS_PAS_PRE_SHUTDOWN:-1}"
 
 case "$VENUS_FW_STAGE" in
 	0|1|2|3|4|5) ;;
@@ -34,6 +35,10 @@ case "$VENUS_PROBE_STAGE" in
 	0|1|2|3|4) ;;
 	*) echo "VENUS_PROBE_STAGE 必须是 0(full)、1(boot-stop)、2(cfg-stop)、3(resume-stop) 或 4(init-stop)" >&2; exit 1 ;;
 esac
+case "$VENUS_PAS_PRE_SHUTDOWN" in
+	0|1) ;;
+	*) echo "VENUS_PAS_PRE_SHUTDOWN 必须是 0 或 1" >&2; exit 1 ;;
+esac
 
 if ! findmnt -rn /home >/dev/null; then
 	echo "拒绝探测：/home 未挂载，无法保证 watchdog 重启后日志仍在" >&2
@@ -43,6 +48,14 @@ fi
 mkdir -p "$OUT_DIR"
 chmod 0755 "$BASE_DIR" "$OUT_DIR"
 exec > >(tee -a "$LOG") 2>&1
+
+ATTEMPT_FILE=/run/raphael-venus-pas-attempts
+PAS_ATTEMPT=0
+if [ -r "$ATTEMPT_FILE" ]; then
+	read -r PAS_ATTEMPT < "$ATTEMPT_FILE" || PAS_ATTEMPT=0
+fi
+PAS_ATTEMPT=$((PAS_ATTEMPT + 1))
+echo "$PAS_ATTEMPT" > "$ATTEMPT_FILE"
 
 checkpoint() {
 	echo "[$(date --iso-8601=seconds)] $*"
@@ -144,12 +157,13 @@ if ! kill -0 "$KMSG_PID" 2>/dev/null; then
 	exit 4
 fi
 checkpoint "persistent logger active (pid=$KMSG_PID); loading venus_core explicitly"
-checkpoint "diagnostic fw_stage=$VENUS_FW_STAGE hold_ms=$VENUS_FW_HOLD_MS probe_stage=$VENUS_PROBE_STAGE checkpoint_ms=$VENUS_CHECKPOINT_MS"
+checkpoint "diagnostic attempt=$PAS_ATTEMPT fw_stage=$VENUS_FW_STAGE hold_ms=$VENUS_FW_HOLD_MS probe_stage=$VENUS_PROBE_STAGE pre_shutdown=$VENUS_PAS_PRE_SHUTDOWN checkpoint_ms=$VENUS_CHECKPOINT_MS"
 modprobe -v venus_core allow_iris1_probe=1 \
 	iris1_fw_stage="$VENUS_FW_STAGE" \
 	iris1_fw_checkpoint_ms="$VENUS_CHECKPOINT_MS" \
 	iris1_fw_hold_ms="$VENUS_FW_HOLD_MS" \
-	iris1_probe_stage="$VENUS_PROBE_STAGE"
+	iris1_probe_stage="$VENUS_PROBE_STAGE" \
+	iris1_pas_pre_shutdown="$VENUS_PAS_PRE_SHUTDOWN"
 checkpoint "modprobe returned successfully"
 
 sleep 2
