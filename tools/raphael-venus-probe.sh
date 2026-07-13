@@ -19,7 +19,8 @@ VENUS_FW_STAGE="${VENUS_FW_STAGE:-1}"
 VENUS_CHECKPOINT_MS="${VENUS_CHECKPOINT_MS:-1500}"
 VENUS_FW_HOLD_MS="${VENUS_FW_HOLD_MS:-100}"
 VENUS_PROBE_STAGE="${VENUS_PROBE_STAGE:-0}"
-VENUS_PAS_PRE_SHUTDOWN="${VENUS_PAS_PRE_SHUTDOWN:-1}"
+VENUS_RUN_STAGE="${VENUS_RUN_STAGE:-0}"
+VENUS_ALLOW_REPEAT_PAS="${VENUS_ALLOW_REPEAT_PAS:-0}"
 
 case "$VENUS_FW_STAGE" in
 	0|1|2|3|4|5) ;;
@@ -35,9 +36,13 @@ case "$VENUS_PROBE_STAGE" in
 	0|1|2|3|4) ;;
 	*) echo "VENUS_PROBE_STAGE 必须是 0(full)、1(boot-stop)、2(cfg-stop)、3(resume-stop) 或 4(init-stop)" >&2; exit 1 ;;
 esac
-case "$VENUS_PAS_PRE_SHUTDOWN" in
+case "$VENUS_RUN_STAGE" in
+	0|1|2|3|4|5|6) ;;
+	*) echo "VENUS_RUN_STAGE 必须是 0(full)、1(remote-state)、2(presets)、3(CPU queues)、4(DSP queues)、5(IRQ setup) 或 6(boot-ready)" >&2; exit 1 ;;
+esac
+case "$VENUS_ALLOW_REPEAT_PAS" in
 	0|1) ;;
-	*) echo "VENUS_PAS_PRE_SHUTDOWN 必须是 0 或 1" >&2; exit 1 ;;
+	*) echo "VENUS_ALLOW_REPEAT_PAS 必须是 0 或 1" >&2; exit 1 ;;
 esac
 
 if ! findmnt -rn /home >/dev/null; then
@@ -49,13 +54,32 @@ mkdir -p "$OUT_DIR"
 chmod 0755 "$BASE_DIR" "$OUT_DIR"
 exec > >(tee -a "$LOG") 2>&1
 
-ATTEMPT_FILE=/run/raphael-venus-pas-attempts
+BOOT_ID="$(cat /proc/sys/kernel/random/boot_id)"
+ATTEMPT_FILE="$BASE_DIR/.pas-attempt-state"
 PAS_ATTEMPT=0
+PREVIOUS_BOOT_ID=""
 if [ -r "$ATTEMPT_FILE" ]; then
-	read -r PAS_ATTEMPT < "$ATTEMPT_FILE" || PAS_ATTEMPT=0
+	read -r PREVIOUS_BOOT_ID PAS_ATTEMPT < "$ATTEMPT_FILE" || PAS_ATTEMPT=0
+	[ "$PREVIOUS_BOOT_ID" = "$BOOT_ID" ] || PAS_ATTEMPT=0
 fi
-PAS_ATTEMPT=$((PAS_ATTEMPT + 1))
-echo "$PAS_ATTEMPT" > "$ATTEMPT_FILE"
+
+# full/auth/protect/hold enter PAS; map/load do not change secure state.
+PAS_TOUCHES=0
+case "$VENUS_FW_STAGE" in
+	0|3|4|5) PAS_TOUCHES=1 ;;
+esac
+if [ "$VENUS_PROBE_STAGE" -ge 3 ] && [ "$PAS_TOUCHES" -eq 1 ] &&
+	[ "$PAS_ATTEMPT" -ge 1 ] &&
+	[ "$VENUS_ALLOW_REPEAT_PAS" -ne 1 ]; then
+	echo "拒绝探测：同一 boot 已执行 $PAS_ATTEMPT 次 Venus PAS；HFI 阶段要求先重启设备" >&2
+	echo "如需有意覆盖，设置 VENUS_ALLOW_REPEAT_PAS=1" >&2
+	exit 6
+fi
+
+if [ "$PAS_TOUCHES" -eq 1 ]; then
+	PAS_ATTEMPT=$((PAS_ATTEMPT + 1))
+	printf '%s %s\n' "$BOOT_ID" "$PAS_ATTEMPT" > "$ATTEMPT_FILE"
+fi
 
 checkpoint() {
 	echo "[$(date --iso-8601=seconds)] $*"
@@ -157,13 +181,13 @@ if ! kill -0 "$KMSG_PID" 2>/dev/null; then
 	exit 4
 fi
 checkpoint "persistent logger active (pid=$KMSG_PID); loading venus_core explicitly"
-checkpoint "diagnostic attempt=$PAS_ATTEMPT fw_stage=$VENUS_FW_STAGE hold_ms=$VENUS_FW_HOLD_MS probe_stage=$VENUS_PROBE_STAGE pre_shutdown=$VENUS_PAS_PRE_SHUTDOWN checkpoint_ms=$VENUS_CHECKPOINT_MS"
+checkpoint "diagnostic boot_id=$BOOT_ID attempt=$PAS_ATTEMPT fw_stage=$VENUS_FW_STAGE hold_ms=$VENUS_FW_HOLD_MS probe_stage=$VENUS_PROBE_STAGE run_stage=$VENUS_RUN_STAGE checkpoint_ms=$VENUS_CHECKPOINT_MS"
 modprobe -v venus_core allow_iris1_probe=1 \
 	iris1_fw_stage="$VENUS_FW_STAGE" \
 	iris1_fw_checkpoint_ms="$VENUS_CHECKPOINT_MS" \
 	iris1_fw_hold_ms="$VENUS_FW_HOLD_MS" \
 	iris1_probe_stage="$VENUS_PROBE_STAGE" \
-	iris1_pas_pre_shutdown="$VENUS_PAS_PRE_SHUTDOWN"
+	iris1_run_stage="$VENUS_RUN_STAGE"
 checkpoint "modprobe returned successfully"
 
 sleep 2
