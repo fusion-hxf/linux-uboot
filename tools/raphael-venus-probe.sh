@@ -45,7 +45,7 @@ esac
 case "$VENUS_IRQ_ACK_STAGE" in
 	0|2|3) ;;
 	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2 或 3" >&2; exit 1 ;;
-	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear) 或 3(full-stop)" >&2; exit 1 ;;
+	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear) 或 3(masked-stop)" >&2; exit 1 ;;
 esac
 if [ "$VENUS_IRQ_ACK_STAGE" -ne 0 ] && [ "$VENUS_RUN_STAGE" -ne 6 ]; then
 	echo "VENUS_IRQ_ACK_STAGE 非 0 时必须配合 VENUS_RUN_STAGE=6，确保诊断后立即安全退出" >&2
@@ -218,7 +218,8 @@ modprobe -v venus_core allow_iris1_probe=1 \
 	iris1_fw_hold_ms="$VENUS_FW_HOLD_MS" \
 	iris1_probe_stage="$VENUS_PROBE_STAGE" \
 	iris1_run_stage="$VENUS_RUN_STAGE" \
-	iris1_irq_ack_stage="$VENUS_IRQ_ACK_STAGE"
+	iris1_irq_ack_stage="$VENUS_IRQ_ACK_STAGE" \
+	iris1_irq_checkpoint_ms="$VENUS_CHECKPOINT_MS"
 if [ "$PAS_TOUCHES" -eq 1 ]; then
 	rm -f "$DIRTY_FILE"
 	sync -f "$BASE_DIR" 2>/dev/null || sync
