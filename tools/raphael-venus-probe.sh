@@ -22,6 +22,7 @@ VENUS_PROBE_STAGE="${VENUS_PROBE_STAGE:-0}"
 VENUS_RUN_STAGE="${VENUS_RUN_STAGE:-0}"
 VENUS_IRQ_ACK_STAGE="${VENUS_IRQ_ACK_STAGE:-0}"
 VENUS_ALLOW_REPEAT_PAS="${VENUS_ALLOW_REPEAT_PAS:-0}"
+VENUS_COLD_BOOT_CONFIRMED="${VENUS_COLD_BOOT_CONFIRMED:-0}"
 
 case "$VENUS_FW_STAGE" in
 	0|1|2|3|4|5) ;;
@@ -42,8 +43,9 @@ case "$VENUS_RUN_STAGE" in
 	*) echo "VENUS_RUN_STAGE 必须是 0(full)、1(remote-state)、2(presets)、3(CPU queues)、4(DSP queues)、5(IRQ setup) 或 6(boot-ready)" >&2; exit 1 ;;
 esac
 case "$VENUS_IRQ_ACK_STAGE" in
-	0|1|2|3) ;;
-	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、1(status-only)、2(CPU-clear) 或 3(full-trace)" >&2; exit 1 ;;
+	0|2|3) ;;
+	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2 或 3" >&2; exit 1 ;;
+	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear) 或 3(full-stop)" >&2; exit 1 ;;
 esac
 if [ "$VENUS_IRQ_ACK_STAGE" -ne 0 ] && [ "$VENUS_RUN_STAGE" -ne 6 ]; then
 	echo "VENUS_IRQ_ACK_STAGE 非 0 时必须配合 VENUS_RUN_STAGE=6，确保诊断后立即安全退出" >&2
@@ -52,6 +54,10 @@ fi
 case "$VENUS_ALLOW_REPEAT_PAS" in
 	0|1) ;;
 	*) echo "VENUS_ALLOW_REPEAT_PAS 必须是 0 或 1" >&2; exit 1 ;;
+esac
+case "$VENUS_COLD_BOOT_CONFIRMED" in
+	0|1) ;;
+	*) echo "VENUS_COLD_BOOT_CONFIRMED 必须是 0 或 1" >&2; exit 1 ;;
 esac
 
 if ! findmnt -rn /home >/dev/null; then
@@ -65,6 +71,7 @@ exec > >(tee -a "$LOG") 2>&1
 
 BOOT_ID="$(cat /proc/sys/kernel/random/boot_id)"
 ATTEMPT_FILE="$BASE_DIR/.pas-attempt-state"
+DIRTY_FILE="$BASE_DIR/.pas-dirty-state"
 PAS_ATTEMPT=0
 PREVIOUS_BOOT_ID=""
 if [ -r "$ATTEMPT_FILE" ]; then
@@ -77,6 +84,15 @@ PAS_TOUCHES=0
 case "$VENUS_FW_STAGE" in
 	0|3|4|5) PAS_TOUCHES=1 ;;
 esac
+
+if [ "$PAS_TOUCHES" -eq 1 ] && [ -e "$DIRTY_FILE" ]; then
+	if [ "$VENUS_COLD_BOOT_CONFIRMED" -ne 1 ]; then
+		echo "拒绝探测：上次 Venus PAS 未正常返回，warm reset 不能保证清除 secure state" >&2
+		echo "物理断电冷启动后设置 VENUS_COLD_BOOT_CONFIRMED=1" >&2
+		exit 7
+	fi
+	rm -f "$DIRTY_FILE"
+fi
 if [ "$VENUS_PROBE_STAGE" -ge 3 ] && [ "$PAS_TOUCHES" -eq 1 ] &&
 	[ "$PAS_ATTEMPT" -ge 1 ] &&
 	[ "$VENUS_ALLOW_REPEAT_PAS" -ne 1 ]; then
@@ -88,6 +104,11 @@ fi
 if [ "$PAS_TOUCHES" -eq 1 ]; then
 	PAS_ATTEMPT=$((PAS_ATTEMPT + 1))
 	printf '%s %s\n' "$BOOT_ID" "$PAS_ATTEMPT" > "$ATTEMPT_FILE"
+	printf '%s attempt=%s fw=%s probe=%s run=%s irq=%s\n' \
+		"$BOOT_ID" "$PAS_ATTEMPT" "$VENUS_FW_STAGE" \
+		"$VENUS_PROBE_STAGE" "$VENUS_RUN_STAGE" \
+		"$VENUS_IRQ_ACK_STAGE" > "$DIRTY_FILE"
+	sync -f "$DIRTY_FILE" 2>/dev/null || sync
 fi
 
 checkpoint() {
@@ -198,6 +219,10 @@ modprobe -v venus_core allow_iris1_probe=1 \
 	iris1_probe_stage="$VENUS_PROBE_STAGE" \
 	iris1_run_stage="$VENUS_RUN_STAGE" \
 	iris1_irq_ack_stage="$VENUS_IRQ_ACK_STAGE"
+if [ "$PAS_TOUCHES" -eq 1 ]; then
+	rm -f "$DIRTY_FILE"
+	sync -f "$BASE_DIR" 2>/dev/null || sync
+fi
 checkpoint "modprobe returned successfully"
 
 sleep 2
