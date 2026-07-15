@@ -43,9 +43,9 @@ case "$VENUS_RUN_STAGE" in
 	*) echo "VENUS_RUN_STAGE 必须是 0(full)、1(remote-state)、2(presets)、3(CPU queues)、4(DSP queues)、5(IRQ setup) 或 6(boot-ready)" >&2; exit 1 ;;
 esac
 case "$VENUS_IRQ_ACK_STAGE" in
-	0|2|3) ;;
-	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2 或 3" >&2; exit 1 ;;
-	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear) 或 3(masked-stop)" >&2; exit 1 ;;
+	0|2|3|4) ;;
+	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2、3 或 4" >&2; exit 1 ;;
+	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear)、3(masked-stop) 或 4(CPU-mask-stop)" >&2; exit 1 ;;
 esac
 if [ "$VENUS_IRQ_ACK_STAGE" -ne 0 ] && [ "$VENUS_RUN_STAGE" -ne 6 ]; then
 	echo "VENUS_IRQ_ACK_STAGE 非 0 时必须配合 VENUS_RUN_STAGE=6，确保诊断后立即安全退出" >&2
@@ -231,6 +231,21 @@ dmesg > "$OUT_DIR/dmesg-after.txt"
 lsmod > "$OUT_DIR/lsmod-after.txt"
 
 if [ ! -L /sys/bus/platform/devices/aa00000.video-codec/driver ]; then
+	if [ "$VENUS_RUN_STAGE" -eq 6 ] && [ "$VENUS_IRQ_ACK_STAGE" -ne 0 ] &&
+		grep -q 'Iris1 IRQ diagnostic handler quiesced before cleanup' \
+		"$OUT_DIR/dmesg-after.txt"; then
+		checkpoint "Venus IRQ diagnostic completed and cleaned up safely"
+		modprobe -r venus_core 2>/dev/null || true
+		exit 0
+	fi
+
+	if grep -q 'Iris1 IRQ diagnostic refused: pending pre-unmask' \
+		"$OUT_DIR/dmesg-after.txt"; then
+		echo "诊断安全停止：中断解屏蔽前已有 pending 状态" >&2
+		modprobe -r venus_core 2>/dev/null || true
+		exit 8
+	fi
+
 	echo "探测失败：modprobe 返回成功，但 aa00000.video-codec 未绑定" >&2
 	grep -iE 'venus|iris1|video-codec|firmware|gdsc|clock|reset|smmu|iommu' \
 		"$OUT_DIR/dmesg-after.txt" | tail -n 300 || true
