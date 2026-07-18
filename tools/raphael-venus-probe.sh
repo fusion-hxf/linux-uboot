@@ -43,9 +43,9 @@ case "$VENUS_RUN_STAGE" in
 	*) echo "VENUS_RUN_STAGE 必须是 0(full)、1(remote-state)、2(presets)、3(CPU queues)、4(DSP queues)、5(IRQ setup) 或 6(boot-ready)" >&2; exit 1 ;;
 esac
 case "$VENUS_IRQ_ACK_STAGE" in
-	0|2|3|4) ;;
-	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2、3 或 4" >&2; exit 1 ;;
-	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear)、3(masked-stop) 或 4(CPU-mask-stop)" >&2; exit 1 ;;
+	0|2|3|4|5) ;;
+	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2、3、4 或 5" >&2; exit 1 ;;
+	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear)、3(masked-stop)、4(CPU-mask-stop) 或 5(mask-full-clear-verify)" >&2; exit 1 ;;
 esac
 if [ "$VENUS_IRQ_ACK_STAGE" -ne 0 ] && [ "$VENUS_RUN_STAGE" -ne 6 ]; then
 	echo "VENUS_IRQ_ACK_STAGE 非 0 时必须配合 VENUS_RUN_STAGE=6，确保诊断后立即安全退出" >&2
@@ -119,12 +119,15 @@ checkpoint() {
 cleanup() {
 	local rc=$?
 
+	# Persist the result before any best-effort collection or final sync.  If
+	# teardown wedges, the missing/later files identify the exact boundary.
+	echo "$rc" > "$OUT_DIR/exit-status.txt"
+	sync -f "$OUT_DIR/exit-status.txt" 2>/dev/null || true
 	[ -z "$KMSG_PID" ] || kill "$KMSG_PID" 2>/dev/null || true
 	[ -z "$SYNC_PID" ] || kill "$SYNC_PID" 2>/dev/null || true
 	[ -z "$OLD_CONSOLE_LOGLEVEL" ] ||
 		dmesg -n "$OLD_CONSOLE_LOGLEVEL" 2>/dev/null || true
 	dmesg > "$OUT_DIR/dmesg-exit.txt" 2>/dev/null || true
-	echo "$rc" > "$OUT_DIR/exit-status.txt"
 	chown -R "$USER_NAME:$USER_NAME" "$OUT_DIR" 2>/dev/null || true
 	sync
 	exit "$rc"
@@ -135,7 +138,7 @@ checkpoint "Venus manual probe start; output=$OUT_DIR"
 
 # dev_info() breadcrumbs are level 6.  Raise the console threshold so ramoops
 # receives them as well as the printk ring buffer; restore it on a clean exit.
-OLD_CONSOLE_LOGLEVEL="$(cut -d " " -f 1 /proc/sys/kernel/printk)"
+read -r OLD_CONSOLE_LOGLEVEL _ </proc/sys/kernel/printk
 cat /proc/sys/kernel/printk > "$OUT_DIR/printk-before.txt"
 dmesg -n 8
 checkpoint "console loglevel raised: $OLD_CONSOLE_LOGLEVEL -> 8"
@@ -186,6 +189,7 @@ grep -iE 'venus|vcodec|mmcx' \
 grep -iE 'gcc_video_axi[0-9c]_clk|video_cc_(mvsc|mvs0)_core_clk' \
 	/sys/kernel/debug/clk/clk_summary 2>/dev/null || true
 dmesg > "$OUT_DIR/dmesg-before.txt"
+cat /proc/interrupts > "$OUT_DIR/interrupts-before.txt"
 cp /sys/kernel/debug/pm_genpd/pm_genpd_summary \
 	"$OUT_DIR/pm-genpd-before.txt" 2>/dev/null || true
 cp /sys/kernel/debug/clk/clk_summary \
@@ -220,37 +224,50 @@ modprobe -v venus_core allow_iris1_probe=1 \
 	iris1_run_stage="$VENUS_RUN_STAGE" \
 	iris1_irq_ack_stage="$VENUS_IRQ_ACK_STAGE" \
 	iris1_irq_checkpoint_ms="$VENUS_CHECKPOINT_MS"
-if [ "$PAS_TOUCHES" -eq 1 ]; then
-	rm -f "$DIRTY_FILE"
-	sync -f "$BASE_DIR" 2>/dev/null || sync
-fi
 checkpoint "modprobe returned successfully"
 
 sleep 2
 dmesg > "$OUT_DIR/dmesg-after.txt"
 lsmod > "$OUT_DIR/lsmod-after.txt"
+cat /proc/interrupts > "$OUT_DIR/interrupts-after.txt"
 
 if [ ! -L /sys/bus/platform/devices/aa00000.video-codec/driver ]; then
-	if [ "$VENUS_RUN_STAGE" -eq 6 ] && [ "$VENUS_IRQ_ACK_STAGE" -ne 0 ] &&
-		grep -q 'Iris1 IRQ diagnostic handler quiesced before cleanup' \
-		"$OUT_DIR/dmesg-after.txt"; then
-		checkpoint "Venus IRQ diagnostic completed and cleaned up safely"
-		modprobe -r venus_core 2>/dev/null || true
+	if [ "$VENUS_RUN_STAGE" -eq 6 ] && [ "$VENUS_IRQ_ACK_STAGE" -eq 5 ] &&
+		grep -q 'Iris1 IRQ diagnostic stage 5 verified: source masked and A2H status cleared' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'probe cleanup complete before returning error=-125' \
+			"$OUT_DIR/dmesg-after.txt"; then
+		if [ "$PAS_TOUCHES" -eq 1 ]; then
+			rm -f "$DIRTY_FILE"
+			sync -f "$BASE_DIR" 2>/dev/null || sync
+		fi
+		printf '%s\n' \
+			'stage=5' \
+			'irq_ack=verified' \
+			'probe_cleanup=verified' \
+			'module_unload=intentionally-skipped' \
+			> "$OUT_DIR/diagnostic-result.txt"
+		checkpoint "Venus IRQ stage 5 ACK and probe teardown verified; venus_core intentionally retained until reboot"
 		exit 0
 	fi
 
 	if grep -q 'Iris1 IRQ diagnostic refused: pending pre-unmask' \
 		"$OUT_DIR/dmesg-after.txt"; then
 		echo "诊断安全停止：中断解屏蔽前已有 pending 状态" >&2
-		modprobe -r venus_core 2>/dev/null || true
+		echo "为保留现场并避免卸载路径卡死，venus_core 将保留到重启" >&2
 		exit 8
 	fi
 
 	echo "探测失败：modprobe 返回成功，但 aa00000.video-codec 未绑定" >&2
 	grep -iE 'venus|iris1|video-codec|firmware|gdsc|clock|reset|smmu|iommu' \
 		"$OUT_DIR/dmesg-after.txt" | tail -n 300 || true
-	modprobe -r venus_core 2>/dev/null || true
+	echo "为保留现场并避免卸载路径卡死，venus_core 将保留到重启" >&2
 	exit 5
+fi
+
+if [ "$PAS_TOUCHES" -eq 1 ]; then
+	rm -f "$DIRTY_FILE"
+	sync -f "$BASE_DIR" 2>/dev/null || sync
 fi
 
 ls -l /dev/video* /dev/media* > "$OUT_DIR/video-nodes.txt" 2>&1 || true
