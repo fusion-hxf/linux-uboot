@@ -4,7 +4,7 @@
 
 它不维护内核源码，也不维护 U-Boot 源码。内核、固件、ALSA 配置和 boot image 来自外部 release；本仓库负责下载这些产物、创建 rootfs、写入设备配置，并在 GitHub Actions 中打包发布镜像。
 
-默认内核版本 `7.1` 当前对应音频 bring-up 节点。已确认无效的视频驱动尝试不进入默认构建链路。
+默认内核版本 `7.1` 当前包含音频 bring-up 和受安全门控的 Venus 诊断代码。Venus 不会在默认加载时探测 Iris1，只有手工传入 `allow_iris1_probe=1` 才会触碰硬件。
 
 ## 保留内容
 
@@ -24,6 +24,12 @@
 - `docs/build-kernel-2-image/`
 - `docs/reports/`
 - `tools/`
+
+## Venus 手工诊断
+
+`tools/raphael-venus-probe.sh` 的默认资源组合已恢复为历史保守值：200 MHz、`video-mem=2500 kB/s`、不显式应用 OPP、不获取 `video-processor` ICC。新增 Stage 8 会复现曾经到达 firmware boot-ready 的 unmasked 顺序；脚本会先启动持久 kmsg，并把结果写到 `/home/user/venus-bringup/`。
+
+建议先以 `VENUS_RUN_STAGE=5 VENUS_IRQ_ACK_STAGE=0` 验证未触发固件时的资源和清理，再在完整重启后以 `VENUS_RUN_STAGE=6 VENUS_IRQ_ACK_STAGE=8` 验证 legacy-exact。详细命令、风险边界和当前证据见聚合仓库根目录 `README.md` 的“GPU / Venus 视频驱动进展”章节。显式 OPP 与 processor ICC 必须分别单独打开，避免一个用例同时改变两个变量。
 
 ## 本地构建
 
