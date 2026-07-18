@@ -43,13 +43,18 @@ case "$VENUS_RUN_STAGE" in
 	*) echo "VENUS_RUN_STAGE 必须是 0(full)、1(remote-state)、2(presets)、3(CPU queues)、4(DSP queues)、5(IRQ setup) 或 6(boot-ready)" >&2; exit 1 ;;
 esac
 case "$VENUS_IRQ_ACK_STAGE" in
-	0|2|3|4|5) ;;
-	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2、3、4 或 5" >&2; exit 1 ;;
-	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear)、3(masked-stop)、4(CPU-mask-stop) 或 5(mask-full-clear-verify)" >&2; exit 1 ;;
+	0|2|3|4|5|6) ;;
+	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2、3、4、5 或 6" >&2; exit 1 ;;
+	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear)、3(masked-stop)、4(CPU-mask-stop)、5(mask-full-clear-verify) 或 6(masked-poll-verify)" >&2; exit 1 ;;
 esac
 if [ "$VENUS_IRQ_ACK_STAGE" -ne 0 ] && [ "$VENUS_RUN_STAGE" -ne 6 ]; then
 	echo "VENUS_IRQ_ACK_STAGE 非 0 时必须配合 VENUS_RUN_STAGE=6，确保诊断后立即安全退出" >&2
 	exit 1
+fi
+if [ "$VENUS_IRQ_ACK_STAGE" -eq 6 ] &&
+	! modinfo venus_core 2>/dev/null | grep '6=masked-poll-verify' >/dev/null; then
+	echo "拒绝探测：当前 venus_core 不包含 stage 6 masked-poll 诊断，请先刷入本批内核" >&2
+	exit 9
 fi
 case "$VENUS_ALLOW_REPEAT_PAS" in
 	0|1) ;;
@@ -232,6 +237,43 @@ lsmod > "$OUT_DIR/lsmod-after.txt"
 cat /proc/interrupts > "$OUT_DIR/interrupts-after.txt"
 
 if [ ! -L /sys/bus/platform/devices/aa00000.video-codec/driver ]; then
+	if [ "$VENUS_RUN_STAGE" -eq 6 ] && [ "$VENUS_IRQ_ACK_STAGE" -eq 6 ] &&
+		grep -q 'Iris1 IRQ stage 6: Linux IRQ disabled before trigger' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 IRQ stage 6: wrapper source masked before trigger' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		! grep -q 'Iris1 HFI IRQ: status=' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 IRQ diagnostic stage 6 verified: GIC bypassed, boot ready and A2H status cleared' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 HFI destroy: IRQ quiesce start already-disabled=1' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'probe cleanup: PAS shutdown done ret=0' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'probe cleanup: runtime hardware off done' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'probe cleanup complete before returning error=-125' \
+			"$OUT_DIR/dmesg-after.txt"; then
+		if [ "$PAS_TOUCHES" -eq 1 ]; then
+			rm -f "$DIRTY_FILE"
+			sync -f "$BASE_DIR" 2>/dev/null || sync
+		fi
+		printf '%s\n' \
+			'stage=6' \
+			'interrupt_path=masked-poll' \
+			'gic_delivery=bypassed' \
+			'hardirq_entries=0' \
+			'firmware_boot=verified' \
+			'irq_ack=verified' \
+			'pas_shutdown=verified' \
+			'runtime_power_off=verified' \
+			'probe_cleanup=verified' \
+			'module_unload=intentionally-skipped' \
+			> "$OUT_DIR/diagnostic-result.txt"
+		checkpoint "Venus stage 6 masked-poll boot, ACK and teardown verified; venus_core intentionally retained until reboot"
+		exit 0
+	fi
+
 	if [ "$VENUS_RUN_STAGE" -eq 6 ] && [ "$VENUS_IRQ_ACK_STAGE" -eq 5 ] &&
 		grep -q 'Iris1 IRQ diagnostic stage 5 verified: source masked and A2H status cleared' \
 			"$OUT_DIR/dmesg-after.txt" &&
@@ -251,9 +293,9 @@ if [ ! -L /sys/bus/platform/devices/aa00000.video-codec/driver ]; then
 		exit 0
 	fi
 
-	if grep -q 'Iris1 IRQ diagnostic refused: pending pre-unmask' \
+	if grep -q 'Iris1 IRQ diagnostic refused: pending pre-trigger' \
 		"$OUT_DIR/dmesg-after.txt"; then
-		echo "诊断安全停止：中断解屏蔽前已有 pending 状态" >&2
+		echo "诊断安全停止：中断触发前已有 pending 状态" >&2
 		echo "为保留现场并避免卸载路径卡死，venus_core 将保留到重启" >&2
 		exit 8
 	fi
