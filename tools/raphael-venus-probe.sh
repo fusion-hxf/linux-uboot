@@ -21,6 +21,9 @@ VENUS_FW_HOLD_MS="${VENUS_FW_HOLD_MS:-100}"
 VENUS_PROBE_STAGE="${VENUS_PROBE_STAGE:-0}"
 VENUS_RUN_STAGE="${VENUS_RUN_STAGE:-0}"
 VENUS_IRQ_ACK_STAGE="${VENUS_IRQ_ACK_STAGE:-0}"
+VENUS_BOOT_RATE_HZ="${VENUS_BOOT_RATE_HZ:-240000000}"
+VENUS_BOOT_VIDEO_BW_KBPS="${VENUS_BOOT_VIDEO_BW_KBPS:-6533000}"
+VENUS_BOOT_PROC_BW_KBPS="${VENUS_BOOT_PROC_BW_KBPS:-1000}"
 VENUS_ALLOW_REPEAT_PAS="${VENUS_ALLOW_REPEAT_PAS:-0}"
 VENUS_COLD_BOOT_CONFIRMED="${VENUS_COLD_BOOT_CONFIRMED:-0}"
 
@@ -43,9 +46,9 @@ case "$VENUS_RUN_STAGE" in
 	*) echo "VENUS_RUN_STAGE 必须是 0(full)、1(remote-state)、2(presets)、3(CPU queues)、4(DSP queues)、5(IRQ setup) 或 6(boot-ready)" >&2; exit 1 ;;
 esac
 case "$VENUS_IRQ_ACK_STAGE" in
-	0|2|3|4|5|6) ;;
-	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2、3、4、5 或 6" >&2; exit 1 ;;
-	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear)、3(masked-stop)、4(CPU-mask-stop)、5(mask-full-clear-verify) 或 6(masked-poll-verify)" >&2; exit 1 ;;
+	0|2|3|4|5|6|7) ;;
+	1) echo "VENUS_IRQ_ACK_STAGE=1 会留下未确认中断，已禁用；请使用 2、3、4、5、6 或 7" >&2; exit 1 ;;
+	*) echo "VENUS_IRQ_ACK_STAGE 必须是 0(full)、2(CPU-clear)、3(masked-stop)、4(CPU-mask-stop)、5(mask-full-clear-verify)、6(masked-poll-verify) 或 7(masked-trigger-no-read)" >&2; exit 1 ;;
 esac
 if [ "$VENUS_IRQ_ACK_STAGE" -ne 0 ] && [ "$VENUS_RUN_STAGE" -ne 6 ]; then
 	echo "VENUS_IRQ_ACK_STAGE 非 0 时必须配合 VENUS_RUN_STAGE=6，确保诊断后立即安全退出" >&2
@@ -56,6 +59,21 @@ if [ "$VENUS_IRQ_ACK_STAGE" -eq 6 ] &&
 	echo "拒绝探测：当前 venus_core 不包含 stage 6 masked-poll 诊断，请先刷入本批内核" >&2
 	exit 9
 fi
+if [ "$VENUS_IRQ_ACK_STAGE" -eq 7 ] &&
+	! modinfo venus_core 2>/dev/null | grep '7=masked-trigger-no-read' >/dev/null; then
+	echo "拒绝探测：当前 venus_core 不包含 stage 7 masked-trigger-no-read 诊断，请先刷入本批内核" >&2
+	exit 9
+fi
+case "$VENUS_BOOT_RATE_HZ" in
+	200000000|240000000|338000000|365000000|444000000) ;;
+	*) echo "VENUS_BOOT_RATE_HZ 必须是当前 OPP 表中的 200000000、240000000、338000000、365000000 或 444000000" >&2; exit 1 ;;
+esac
+case "$VENUS_BOOT_VIDEO_BW_KBPS" in
+	''|*[!0-9]*) echo "VENUS_BOOT_VIDEO_BW_KBPS 必须是非负整数" >&2; exit 1 ;;
+esac
+case "$VENUS_BOOT_PROC_BW_KBPS" in
+	''|*[!0-9]*) echo "VENUS_BOOT_PROC_BW_KBPS 必须是非负整数" >&2; exit 1 ;;
+esac
 case "$VENUS_ALLOW_REPEAT_PAS" in
 	0|1) ;;
 	*) echo "VENUS_ALLOW_REPEAT_PAS 必须是 0 或 1" >&2; exit 1 ;;
@@ -109,10 +127,12 @@ fi
 if [ "$PAS_TOUCHES" -eq 1 ]; then
 	PAS_ATTEMPT=$((PAS_ATTEMPT + 1))
 	printf '%s %s\n' "$BOOT_ID" "$PAS_ATTEMPT" > "$ATTEMPT_FILE"
-	printf '%s attempt=%s fw=%s probe=%s run=%s irq=%s\n' \
+	printf '%s attempt=%s fw=%s probe=%s run=%s irq=%s rate=%s video_bw=%s proc_bw=%s\n' \
 		"$BOOT_ID" "$PAS_ATTEMPT" "$VENUS_FW_STAGE" \
 		"$VENUS_PROBE_STAGE" "$VENUS_RUN_STAGE" \
-		"$VENUS_IRQ_ACK_STAGE" > "$DIRTY_FILE"
+		"$VENUS_IRQ_ACK_STAGE" "$VENUS_BOOT_RATE_HZ" \
+		"$VENUS_BOOT_VIDEO_BW_KBPS" "$VENUS_BOOT_PROC_BW_KBPS" \
+		> "$DIRTY_FILE"
 	sync -f "$DIRTY_FILE" 2>/dev/null || sync
 fi
 
@@ -199,6 +219,8 @@ cp /sys/kernel/debug/pm_genpd/pm_genpd_summary \
 	"$OUT_DIR/pm-genpd-before.txt" 2>/dev/null || true
 cp /sys/kernel/debug/clk/clk_summary \
 	"$OUT_DIR/clk-summary-before.txt" 2>/dev/null || true
+cp /sys/kernel/debug/interconnect/interconnect_summary \
+	"$OUT_DIR/interconnect-before.txt" 2>/dev/null || true
 mkdir -p "$OUT_DIR/pstore-before"
 cp -a /sys/fs/pstore/. "$OUT_DIR/pstore-before/" 2>/dev/null || true
 
@@ -220,7 +242,7 @@ if ! kill -0 "$KMSG_PID" 2>/dev/null; then
 	exit 4
 fi
 checkpoint "persistent logger active (pid=$KMSG_PID); loading venus_core explicitly"
-checkpoint "diagnostic boot_id=$BOOT_ID attempt=$PAS_ATTEMPT fw_stage=$VENUS_FW_STAGE hold_ms=$VENUS_FW_HOLD_MS probe_stage=$VENUS_PROBE_STAGE run_stage=$VENUS_RUN_STAGE irq_ack_stage=$VENUS_IRQ_ACK_STAGE checkpoint_ms=$VENUS_CHECKPOINT_MS"
+checkpoint "diagnostic boot_id=$BOOT_ID attempt=$PAS_ATTEMPT fw_stage=$VENUS_FW_STAGE hold_ms=$VENUS_FW_HOLD_MS probe_stage=$VENUS_PROBE_STAGE run_stage=$VENUS_RUN_STAGE irq_ack_stage=$VENUS_IRQ_ACK_STAGE checkpoint_ms=$VENUS_CHECKPOINT_MS boot_rate_hz=$VENUS_BOOT_RATE_HZ video_bw_kBps=$VENUS_BOOT_VIDEO_BW_KBPS proc_bw_kBps=$VENUS_BOOT_PROC_BW_KBPS"
 modprobe -v venus_core allow_iris1_probe=1 \
 	iris1_fw_stage="$VENUS_FW_STAGE" \
 	iris1_fw_checkpoint_ms="$VENUS_CHECKPOINT_MS" \
@@ -228,16 +250,77 @@ modprobe -v venus_core allow_iris1_probe=1 \
 	iris1_probe_stage="$VENUS_PROBE_STAGE" \
 	iris1_run_stage="$VENUS_RUN_STAGE" \
 	iris1_irq_ack_stage="$VENUS_IRQ_ACK_STAGE" \
-	iris1_irq_checkpoint_ms="$VENUS_CHECKPOINT_MS"
+	iris1_irq_checkpoint_ms="$VENUS_CHECKPOINT_MS" \
+	iris1_boot_rate_hz="$VENUS_BOOT_RATE_HZ" \
+	iris1_boot_video_bw_kbps="$VENUS_BOOT_VIDEO_BW_KBPS" \
+	iris1_boot_proc_bw_kbps="$VENUS_BOOT_PROC_BW_KBPS"
 checkpoint "modprobe returned successfully"
 
 sleep 2
 dmesg > "$OUT_DIR/dmesg-after.txt"
 lsmod > "$OUT_DIR/lsmod-after.txt"
 cat /proc/interrupts > "$OUT_DIR/interrupts-after.txt"
+cp /sys/kernel/debug/interconnect/interconnect_summary \
+	"$OUT_DIR/interconnect-after.txt" 2>/dev/null || true
 
 if [ ! -L /sys/bus/platform/devices/aa00000.video-codec/driver ]; then
+	if [ "$VENUS_RUN_STAGE" -eq 6 ] && [ "$VENUS_IRQ_ACK_STAGE" -eq 7 ] &&
+		grep -q "Iris1 boot clock selection: requested=$VENUS_BOOT_RATE_HZ selected-opp=$VENUS_BOOT_RATE_HZ" \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q "Iris1 boot ICC configuration: video-mem=$VENUS_BOOT_VIDEO_BW_KBPS kB/s video-processor=$VENUS_BOOT_PROC_BW_KBPS kB/s" \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 probe checkpoint: video-processor ICC vote done' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 IRQ stage 7: Linux IRQ disabled before trigger' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 IRQ stage 7: wrapper source masked before trigger' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 IRQ stage 7: CTRL_INIT write committed; entering' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 IRQ stage 7 heartbeat: survived trigger without Venus MMIO' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		! grep -q 'Iris1 HFI IRQ: status=' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 HFI destroy: IRQ quiesce start already-disabled=1' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'probe cleanup: PAS shutdown done ret=0' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'probe cleanup: runtime hardware off done' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'probe cleanup: video-processor ICC vote removed' \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'probe cleanup complete before returning error=-125' \
+			"$OUT_DIR/dmesg-after.txt"; then
+		if [ "$PAS_TOUCHES" -eq 1 ]; then
+			rm -f "$DIRTY_FILE"
+			sync -f "$BASE_DIR" 2>/dev/null || sync
+		fi
+		printf '%s\n' \
+			'stage=7' \
+			'interrupt_path=masked-trigger-no-read' \
+			'gic_delivery=bypassed' \
+			'hardirq_entries=0' \
+			"boot_rate_hz=$VENUS_BOOT_RATE_HZ" \
+			"video_bw_kBps=$VENUS_BOOT_VIDEO_BW_KBPS" \
+			"proc_bw_kBps=$VENUS_BOOT_PROC_BW_KBPS" \
+			'post_trigger_no_mmio_heartbeat=verified' \
+			'pas_shutdown=verified' \
+			'runtime_power_off=verified' \
+			'video_processor_icc_cleanup=verified' \
+			'probe_cleanup=verified' \
+			'module_unload=intentionally-skipped' \
+			> "$OUT_DIR/diagnostic-result.txt"
+		checkpoint "Venus stage 7 survived CTRL_INIT without post-trigger MMIO and teardown verified; venus_core intentionally retained until reboot"
+		exit 0
+	fi
+
 	if [ "$VENUS_RUN_STAGE" -eq 6 ] && [ "$VENUS_IRQ_ACK_STAGE" -eq 6 ] &&
+		grep -q "Iris1 boot clock selection: requested=$VENUS_BOOT_RATE_HZ selected-opp=$VENUS_BOOT_RATE_HZ" \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q "Iris1 boot ICC configuration: video-mem=$VENUS_BOOT_VIDEO_BW_KBPS kB/s video-processor=$VENUS_BOOT_PROC_BW_KBPS kB/s" \
+			"$OUT_DIR/dmesg-after.txt" &&
+		grep -q 'Iris1 probe checkpoint: video-processor ICC vote done' \
+			"$OUT_DIR/dmesg-after.txt" &&
 		grep -q 'Iris1 IRQ stage 6: Linux IRQ disabled before trigger' \
 			"$OUT_DIR/dmesg-after.txt" &&
 		grep -q 'Iris1 IRQ stage 6: wrapper source masked before trigger' \
@@ -263,6 +346,9 @@ if [ ! -L /sys/bus/platform/devices/aa00000.video-codec/driver ]; then
 			'interrupt_path=masked-poll' \
 			'gic_delivery=bypassed' \
 			'hardirq_entries=0' \
+			"boot_rate_hz=$VENUS_BOOT_RATE_HZ" \
+			"video_bw_kBps=$VENUS_BOOT_VIDEO_BW_KBPS" \
+			"proc_bw_kBps=$VENUS_BOOT_PROC_BW_KBPS" \
 			'firmware_boot=verified' \
 			'irq_ack=verified' \
 			'pas_shutdown=verified' \
